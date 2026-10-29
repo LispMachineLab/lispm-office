@@ -716,33 +716,38 @@ remains in scope; switching session returns to Session scope."
     (remove-hook 'window-state-change-functions #'lispm-office--windows-changed)
     (remove-hook 'lispm-ui-palette-changed-hook #'lispm-office--palette-changed)))
 
+(defun lispm-office--focus-selection ()
+  "Put keyboard focus on the scene or the selected agent's text row."
+  (let ((position lispm-office--floor-start))
+    (unless (lispm-office--graphic-p)
+      (while (and (< position (point-max))
+                  (not (equal lispm-office--selected
+                              (get-text-property position 'lispm-office-key))))
+        (setq position (next-single-property-change position 'lispm-office-key nil (point-max))))
+      (when (= position (point-max)) (setq position lispm-office--floor-start)))
+    (goto-char position)
+    (when-let* ((window (lispm-office--window)))
+      (set-window-point window position))))
+
 (defun lispm-office--select (key &optional inspect)
   "Select KEY, enter its room if needed, and optionally INSPECT."
   (when-let* ((node (seq-find (lambda (r) (equal key (plist-get r :key)))
                             (plist-get lispm-office--plan :nodes))))
     (setq lispm-office--selected key)
-    (when (or (< (plist-get (lispm-office-render-projection
-                            (lispm-office--scene-plan) lispm-office--scale lispm-office--room) :scale) 0.45)
-              (and (null lispm-office--room) (lispm-office--graphic-p)
-                   (let ((projection (lispm-office-render-projection (lispm-office--scene-plan) lispm-office--scale))
-                         (size (lispm-office--dimensions)))
-                     (or (> (plist-get projection :pixel-width) (car size))
-                         (> (plist-get projection :pixel-height) (cdr size)))))
+    (when (or (and (lispm-office--graphic-p)
+                   (or (< (plist-get (lispm-office-render-projection
+                                      (lispm-office--scene-plan) lispm-office--scale lispm-office--room)
+                                     :scale) 0.45)
+                       (and (null lispm-office--room)
+                            (let ((projection (lispm-office-render-projection
+                                               (lispm-office--scene-plan) lispm-office--scale))
+                                  (size (lispm-office--dimensions)))
+                              (or (> (plist-get projection :pixel-width) (car size))
+                                  (> (plist-get projection :pixel-height) (cdr size)))))))
               (and lispm-office--room (not (equal lispm-office--room (plist-get node :room)))))
       (setq lispm-office--room (plist-get node :room) lispm-office--fit t))
     (lispm-office--draw)
-    (unless (lispm-office--graphic-p)
-      (let ((position (text-property-any lispm-office--floor-start (point-max) 'lispm-office-key key)))
-        ;; Text properties may contain an equal copy of a stable key.
-        (unless position
-          (setq position lispm-office--floor-start)
-          (while (and (< position (point-max))
-                      (not (equal key (get-text-property position 'lispm-office-key))))
-            (setq position (next-single-property-change position 'lispm-office-key nil (point-max)))))
-        (when (and position (< position (point-max)))
-          (goto-char position)
-          (when-let* ((window (lispm-office--window)))
-            (set-window-point window position)))))
+    (lispm-office--focus-selection)
     (lispm-office--sync-timer)
     (when inspect (lispm-office-inspect-selected))))
 
@@ -775,12 +780,26 @@ remains in scope; switching session returns to Session scope."
 (defun lispm-office-abort-selected () "Confirm stopping this agent and clearing its queue." (interactive) (lispm-office-abort (lispm-office--key)))
 
 (defun lispm-office--move (dx dy)
-  "Select the nearest desk in direction DX, DY."
-  (let* ((nodes (if lispm-office--room (lispm-office--visible-nodes)
-                  (plist-get (lispm-office--scene-plan) :nodes)))
+  "Select the nearest desk in direction DX, DY.
+In text, move through agents in their displayed order instead."
+  (let* ((graphic (lispm-office--graphic-p))
+         (nodes (if graphic
+                    (if lispm-office--room (lispm-office--visible-nodes)
+                      (plist-get (lispm-office--scene-plan) :nodes))
+                  (cl-loop for room in (plist-get lispm-office--plan :rooms)
+                           when (or (null lispm-office--room)
+                                    (equal lispm-office--room (plist-get room :id)))
+                           append (plist-get room :nodes))))
          (selected (seq-find (lambda (n) (equal lispm-office--selected (plist-get n :key))) nodes)))
-    (if (not selected)
-        (when nodes (lispm-office--select (plist-get (car nodes) :key)))
+    (cond
+     ((not selected)
+      (when nodes (lispm-office--select (plist-get (car nodes) :key))))
+     ((not graphic)
+      (let* ((index (cl-position selected nodes :test #'eq))
+             (next (+ index (if (zerop dy) dx dy))))
+        (when (and (>= next 0) (< next (length nodes)))
+          (lispm-office--select (plist-get (nth next nodes) :key)))))
+     (t
       (let (best best-distance)
         (dolist (node nodes)
           (let* ((x (- (plist-get node :x) (plist-get selected :x)))
@@ -791,7 +810,7 @@ remains in scope; switching session returns to Session scope."
               (let ((distance (+ forward (* 3 side))))
                 (when (or (null best-distance) (< distance best-distance))
                   (setq best node best-distance distance))))))
-        (when best (lispm-office--select (plist-get best :key)))))))
+        (when best (lispm-office--select (plist-get best :key))))))))
 (defun lispm-office-left () "Select a desk to the left." (interactive) (lispm-office--move -1 0))
 (defun lispm-office-right () "Select a desk to the right." (interactive) (lispm-office--move 1 0))
 (defun lispm-office-up () "Select a desk above." (interactive) (lispm-office--move 0 -1))
@@ -957,6 +976,8 @@ remains in scope; switching session returns to Session scope."
   (lispm-office-refresh :key "g" :label "Refresh")
   (lispm-office-quit :key "q" :label "Return to Previous View"))
 
+(lispm-office-inspect--focus-keys lispm-office-mode-map)
+
 (defun lispm-office--observe ()
   "Install observers shared by the open Office buffers."
   (cl-pushnew (current-buffer) lispm-office--buffers)
@@ -1016,7 +1037,8 @@ The source buffer and its input remain intact."
     (with-current-buffer buffer
       (setq-local header-line-format
                   (when lispm-office--source-buffer '((:eval (lispm-office--view-switcher)))))
-      (lispm-office-refresh))
+      (lispm-office-refresh)
+      (lispm-office--focus-selection))
     buffer))
 
 ;;;###autoload
@@ -1052,6 +1074,7 @@ show the overview.  Toggle back with C-c O or the Conversation control."
       (lispm-office--observe))
     (pop-to-buffer buffer)
     (lispm-office--ingest (lispm-office-demo-records (or count 12)))
+    (lispm-office--focus-selection)
     buffer))
 
 (provide 'lispm-office)

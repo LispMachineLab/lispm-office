@@ -8,7 +8,7 @@ FILES = lispm-office-layout.el lispm-office-render.el lispm-office-inspect.el li
 .PHONY: test compile
 test:
 	$(EMACS) -Q --batch $(LOAD_PATH) --eval '(setq native-comp-enable-subr-trampolines nil)' \
-	  --eval '(mapc (lambda (file) (load file nil t)) (directory-files "test" t "-test\\.el$$"))' \
+	  --eval '(mapc (lambda (file) (require (intern (file-name-base file)) file)) (directory-files "test" t "-test\\.el$$"))' \
 	  -f ert-run-tests-batch-and-exit
 
 compile:

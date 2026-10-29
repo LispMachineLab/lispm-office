@@ -13,6 +13,13 @@ Desktop draws these with its native Mac OS 9 tab control.
 restores the source buffer, draft, point and scroll position; the agent keeps
 running throughout. =q= in Work also returns to the conversation.
 
+In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
+=C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its Inspector;
+Open Chat returns to that same listener. In a text terminal, Work uses a text
+agent list with keyboard navigation, inspection and conversation switching.
+The pixel room and sprite animation require graphical Emacs; terminal graphics
+protocols are not implemented by Office.
+
 In the Desktop Agents sidebar, click a project's folder or name to open that
 directory's Work view in the main pane. Only the disclosure triangle folds or
 unfolds the list. This view includes all active sessions, including idle agents.
@@ -38,6 +45,8 @@ desks by project; these display choices never alter saved global seats.
 
 Click a desk or press =RET= to open its optional Inspector side window with Work,
 Mailbox and Character tabs.
+In the Inspector, =o= opens its conversation, =TAB= / =S-TAB= move between
+controls, and =q= closes it.
 The room fills the available buffer area by default and its desks reflow when
 the window changes size. Avatars and text keep their proportions; saved seat
 identities stay unchanged. The view menu also contains room selection, text view,

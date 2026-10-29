@@ -215,8 +215,9 @@ The actual SVG image implementation is used."
         (setq lispm-office--plan (plist-put (copy-tree lispm-office--plan) :height 20000))
         (let ((room (plist-get (seq-find (lambda (node) (equal (plist-get node :key) '(codex "b")))
                                         (plist-get lispm-office--plan :nodes)) :room)))
-          (lispm-office--select '(codex "b"))
-          (should (equal lispm-office--room room)))))))
+          (lispm-office-test--graphical
+            (lispm-office--select '(codex "b"))
+            (should (equal lispm-office--room room))))))))
 
 (ert-deftest lispm-office-unseen-mail-does-not-start-animation ()
   (lispm-office-test--isolated

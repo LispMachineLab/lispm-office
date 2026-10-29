@@ -37,6 +37,12 @@
 (declare-function lispm-agent-display-buffer "lispm" (agent))
 (declare-function lispm-office--prepare-navigation "lispm-office" (owner))
 (declare-function lispm-office-cleanup-windows "lispm-office" (&rest _))
+(declare-function lispm-office--focus-selection "lispm-office" ())
+(declare-function lispm-terminal-p "lispm-terminal" (&optional frame))
+(declare-function lispm-terminal-show "lispm-terminal" (agent &optional stay))
+(declare-function lispm-terminal-keys-mode "lispm-terminal" (&optional arg))
+(defvar lispm-terminal-map)
+(declare-function lispm-desktop-platinum-tabs "lispm-desktop-platinum-controls" (tabs width &optional face))
 (declare-function lispm-waiting-calls "lispm-runtime" (agent))
 (declare-function lispm-asked "lispm-runtime" (call))
 (declare-function lispm-approve-for "lispm-runtime" (agent &optional id))
@@ -65,6 +71,10 @@
   "The current inspector tab: work, mailbox or character.")
 (defvar-local lispm-office-inspect--dirty nil
   "Non-nil when an unseen inspector needs fresh details when shown.")
+(defvar-local lispm-office-inspect--width nil
+  "Width used by this inspector's last rendering.")
+(defvar lispm-office-inspect--button-end nil)
+(defvar lispm-office-inspect--button-width 0)
 (defvar lispm-office-inspect--cleaning-windows nil
   "Non-nil while transient Inspector windows are being removed.")
 (defvar tab-bar-tab-post-select-functions)
@@ -105,6 +115,26 @@ consult `quit-restore', which may refer to an obsolete placeholder."
       (dolist (window (get-buffer-window-list buffer nil t))
         (lispm-office-inspect--remove-window window owner)))))
 
+(defun lispm-office-inspect--close-hidden-focus-owners ()
+  "Close Inspector panes left by native Focus session-list navigation."
+  (when (fboundp 'lispm-terminal-p)
+    (save-selected-window
+      (save-current-buffer
+        (dolist (entry (copy-sequence lispm-office-inspect--buffers))
+          (let ((owner (car entry)) (inspector (cdr entry)))
+            (when (and (buffer-live-p owner) (buffer-live-p inspector)
+                       (with-current-buffer owner (derived-mode-p 'lispm-office-mode))
+                       (seq-some (lambda (window)
+                                   (let ((frame (window-frame window)))
+                                     (and (lispm-terminal-p frame)
+                                          (not (get-buffer-window owner frame)))))
+                                 (get-buffer-window-list inspector nil t)))
+              (lispm-office-inspect-close owner)
+              (unless (get-buffer-window owner t)
+                ;; Core close clears old return parameters; it only restores
+                ;; the source in windows that still actually show Work.
+                (kill-buffer owner)))))))))
+
 (defun lispm-office-inspect-cleanup-windows (&rest _)
   "Remove obsolete Inspector notices after a window or tab restoration.
 This is safe as a window-state or tab-selection callback.  Writable
@@ -131,6 +161,7 @@ also repair layouts saved before ownership markers were introduced."
       (dolist (buffer (delete-dups placeholders))
         (when (and (buffer-live-p buffer) (not (get-buffer-window buffer t)))
           (kill-buffer buffer)))
+      (lispm-office-inspect--close-hidden-focus-owners)
       (when (fboundp 'lispm-office-cleanup-windows)
         (lispm-office-cleanup-windows)))))
 
@@ -188,6 +219,45 @@ showing BUFFER.  This is a `display-buffer' action function."
       (set-window-buffer window buffer)
       window)))
 
+(defun lispm-office-inspect--focus-p ()
+  "Whether the selected frame is the optional Agent Focus interface."
+  (and (fboundp 'lispm-terminal-p) (lispm-terminal-p)))
+
+(defun lispm-office-inspect--focus-command (sequence)
+  "Leave owned Work panes before running native Focus key SEQUENCE."
+  (unless (lispm-office-inspect--focus-p) (user-error "Focus Mode is no longer active"))
+  (let ((command (and (boundp 'lispm-terminal-map) (lookup-key lispm-terminal-map sequence)))
+        (owner (or lispm-office-inspect--owner (current-buffer))))
+    (unless (commandp command) (user-error "This Focus command is no longer available"))
+    (when (and (buffer-live-p owner)
+               (with-current-buffer owner (derived-mode-p 'lispm-office-mode)))
+      (lispm-office--prepare-navigation owner))
+    (unwind-protect
+        (call-interactively command)
+      (when (and (buffer-live-p owner)
+                 (with-current-buffer owner (derived-mode-p 'lispm-office-mode))
+                 (not (get-buffer-window owner t)))
+        (save-selected-window
+          (save-current-buffer (kill-buffer owner)))))))
+
+(defun lispm-office-inspect--focus-keys (map)
+  "Add the Agent's Focus shortcuts to MAP only within its Focus frame.
+Filters resolve the public terminal map on use, so no terminal dependency,
+mode hooks or ordinary-window bindings are introduced."
+  (dolist (key '("C-c C-s" "C-c C-n" "C-c C-p" "C-c C-j" "C-c C-o" "C-c C-q"))
+    (let* ((sequence (kbd key))
+           (navigate (not (equal key "C-c C-s")))
+           (wrapper (lambda () (interactive) (lispm-office-inspect--focus-command sequence))))
+      (define-key map sequence
+                  (list 'menu-item "Focus Mode" nil :filter
+                        (lambda (_)
+                          (when (and (lispm-office-inspect--focus-p)
+                                     (boundp 'lispm-terminal-map))
+                            (let ((command (lookup-key lispm-terminal-map sequence)))
+                              (when (commandp command)
+                                (if navigate wrapper command)))))))))
+  map)
+
 (defun lispm-office-open-chat (key)
   "Return from Office to the live conversation with stable KEY.
 A native agent's existing chat takes precedence over its hidden
@@ -198,13 +268,15 @@ session is still registered.  The Agent host controls where it opens."
          (agent (plist-get target :agent))
          (view (and agent (lispm-agent-view agent)))
          (owner (or lispm-office-inspect--owner (current-buffer)))
+         (focus (lispm-office-inspect--focus-p))
          (display-buffer-overriding-action
           (if (eq lispm-agents-show-function #'pop-to-buffer)
               `((lispm-office-inspect--display-chat display-buffer-pop-up-window)
                 (lispm-office-owner . ,owner))
             display-buffer-overriding-action))
          (chat
-          (cond ((buffer-live-p view) view)
+          (cond ((and focus agent (fboundp 'lispm-terminal-show)) nil)
+                ((buffer-live-p view) view)
                 ((and agent (or (fboundp 'lispm-agent-display-buffer)
                                 (fboundp 'lispm-switch)))
                  (unless (and (eq buffer (lispm-agent-buffer agent))
@@ -214,11 +286,24 @@ session is still registered.  The Agent host controls where it opens."
                      (lispm-agent-display-buffer agent)
                    (lispm-switch agent)))
                 (t buffer))))
-    (when (and (not (eq lispm-agents-show-function #'pop-to-buffer))
+    (when (and (or focus (not (eq lispm-agents-show-function #'pop-to-buffer)))
                (buffer-live-p owner)
                (with-current-buffer owner (derived-mode-p 'lispm-office-mode)))
       (lispm-office--prepare-navigation owner))
-    (prog1 (lispm-agents-show chat)
+    (prog1 (cond
+            ((and focus agent (fboundp 'lispm-terminal-show))
+             (lispm-terminal-show agent))
+            (focus
+             ;; External terminal collaborators have no native Agent object.
+             ;; Keep their existing canonical buffer in this frame's listener.
+             (let ((window (lispm-office-inspect--display-chat
+                            chat `((lispm-office-owner . ,owner)))))
+               (unless window (user-error "The Focus listener is no longer available"))
+               (when (fboundp 'lispm-terminal-keys-mode)
+                 (with-current-buffer chat (lispm-terminal-keys-mode 1)))
+               (select-window window)
+               chat))
+            (t (lispm-agents-show chat)))
       (when (and (buffer-live-p owner)
                  (with-current-buffer owner (derived-mode-p 'lispm-office-mode))
                  (not (get-buffer-window owner t)))
@@ -373,15 +458,76 @@ preview.  The runtime also bounds synchronous continuations to this turn."
   "Insert a section heading TEXT."
   (insert "\n" (propertize text 'face 'bold) "\n"))
 
+(defun lispm-office-inspect--available-width ()
+  "Return this inspector's width in pixels, or terminal columns."
+  (let* ((window (or (get-buffer-window (current-buffer) 'visible) (selected-window)))
+         (tty (lispm-ui-tty-p)))
+    ;; A terminal control must leave the last column free for Emacs's
+    ;; continuation marker, including when the host uses partial-width panes.
+    (max 1 (- (window-body-width window (not tty)) (if tty 1 0)))))
+
+(defun lispm-office-inspect--tabs ()
+  "Insert native tabs sized to the actual Inspector pane."
+  (let* ((inspector (current-buffer))
+         (width (lispm-office-inspect--available-width))
+         (tabs
+          (mapcar
+           (lambda (entry)
+             (list (cdr entry) (eq (car entry) lispm-office-inspect--tab)
+                   'button (make-symbol "inspector-tab") 'category 'default-button
+                   'keymap button-map 'follow-link t 'mouse-face 'highlight
+                   'help-echo (cdr entry) 'lispm-ui-label (cdr entry)
+                   'action (lambda (_)
+                             (when (buffer-live-p inspector)
+                               (with-current-buffer inspector
+                                 (lispm-office-inspect--set-tab (car entry)))))))
+           '((work . "Work") (mailbox . "Mailbox") (character . "Character")))))
+    (if (and (fboundp 'lispm-desktop-platinum-tabs)
+             (or (lispm-ui-tty-p) (>= width 164)))
+        (insert (lispm-desktop-platinum-tabs tabs width))
+      (let ((used 0))
+        (dolist (tab tabs)
+          (let* ((label (propertize (concat " " (car tab) " ")
+                                    'face (if (cadr tab) 'tab-line-tab-current 'tab-line-tab)))
+                 (size (if (lispm-ui-tty-p) (string-width label) (string-pixel-width label))))
+            (when (and (> used 0) (> (+ used size) width))
+              (insert "\n") (setq used 0))
+            (insert (apply #'propertize label (cddr tab)))
+            (cl-incf used size)))))
+    (insert "\n")))
+
+(defun lispm-office-inspect--title (text)
+  "Insert a centered, inert agent title TEXT."
+  (let* ((caption (propertize (lispm-office-inspect--text text) 'face 'bold))
+         (width (lispm-office-inspect--available-width)))
+    (insert (if (lispm-ui-tty-p)
+                (make-string (max 0 (/ (- width (string-width caption)) 2)) ?\s)
+              (propertize " " 'display
+                          `(space :align-to (- center (,(/ (string-pixel-width caption) 2))))))
+            caption "\n")))
+
 (defun lispm-office-inspect--button (label function &rest arguments)
-  "Insert a button LABEL that calls FUNCTION with ARGUMENTS."
+  "Insert a button LABEL that calls FUNCTION with ARGUMENTS, wrapping rows."
+  (unless (equal lispm-office-inspect--button-end (point))
+    (setq lispm-office-inspect--button-width 0))
+  (let* ((tty (lispm-ui-tty-p))
+         (width (if tty (+ (string-width label) 4)
+                  (+ (lispm-ui-push-button-width label) 4)))
+         (gap (if tty 1 (string-pixel-width " "))))
+    (when (and (> lispm-office-inspect--button-width 0)
+               (> (+ lispm-office-inspect--button-width width gap)
+                  (lispm-office-inspect--available-width)))
+      (insert "\n")
+      (setq lispm-office-inspect--button-width 0))
+    (cl-incf lispm-office-inspect--button-width (+ width gap)))
   (let ((inspector (current-buffer)))
     (lispm-ui-insert-push-button
      label (lambda ()
              (apply function arguments)
              (when (buffer-live-p inspector)
                (with-current-buffer inspector (lispm-office-inspect--draw))))))
-  (insert " "))
+  (insert " ")
+  (setq lispm-office-inspect--button-end (point)))
 
 (defun lispm-office-inspect--set-tab (tab)
   "Select TAB in this inspector."
@@ -497,7 +643,10 @@ a new call that happens to reuse the old call's id."
   "Refresh this inspector, preserving point and the selected tab."
   (unless lispm-ui-current-palette
     (lispm-ui-palette-follow-theme))
-  (let ((inhibit-read-only t) (position (point)))
+  (let ((inhibit-read-only t) (position (point))
+        (lispm-office-inspect--button-end nil)
+        (lispm-office-inspect--button-width 0))
+    (setq lispm-office-inspect--width (lispm-office-inspect--available-width))
     (erase-buffer)
     (condition-case error
         (let* ((target (progn
@@ -505,14 +654,11 @@ a new call that happens to reuse the old call's id."
                            (user-error "Waiting for current session identity"))
                          (lispm-office-inspect--target lispm-office-inspect--key)))
                (status (lispm-agents-buffer-status (plist-get target :buffer))))
-          (insert (propertize (lispm-office-inspect--text (plist-get target :name)) 'face 'bold) "\n")
+          (lispm-office-inspect--title (plist-get target :name))
           (lispm-office-inspect--line "State" (plist-get status :state))
           (lispm-office-inspect--line "Now" (plist-get status :msg))
-          (dolist (tab '((work . "Work") (mailbox . "Mailbox") (character . "Character")))
-            (lispm-office-inspect--button (concat (if (eq (car tab) lispm-office-inspect--tab) "• " "")
-                                                (cdr tab))
-                                          #'lispm-office-inspect--set-tab (car tab)))
-          (insert "\n\n")
+          (lispm-office-inspect--tabs)
+          (insert "\n")
           (lispm-office-inspect--button "Open Chat" #'lispm-office-open-chat lispm-office-inspect--key)
           (when (memq 'send (plist-get target :actions))
             (lispm-office-inspect--button "Compose" #'lispm-office-inspect-compose))
@@ -543,6 +689,12 @@ a new call that happens to reuse the old call's id."
     (lispm-office-send key text)
     (lispm-office-inspect--draw)))
 
+(defun lispm-office-inspect-open-chat ()
+  "Open the conversation currently shown in this Inspector."
+  (interactive)
+  (unless lispm-office-inspect--key (user-error "No conversation selected"))
+  (lispm-office-open-chat lispm-office-inspect--key))
+
 (defun lispm-office-inspect-work ()
   "Show the current work of this conversation."
   (interactive) (lispm-office-inspect--set-tab 'work))
@@ -559,7 +711,12 @@ a new call that happens to reuse the old call's id."
 (defun lispm-office-inspect-quit ()
   "Close this inspector, removing it from the owner's subscriptions."
   (interactive)
-  (lispm-office-inspect--close-buffer (current-buffer)))
+  (let ((owner lispm-office-inspect--owner))
+    (lispm-office-inspect--close-buffer (current-buffer))
+    (when (and (buffer-live-p owner)
+               (eq (window-buffer (selected-window)) owner)
+               (with-current-buffer owner (derived-mode-p 'lispm-office-mode)))
+      (with-current-buffer owner (lispm-office--focus-selection)))))
 
 (defun lispm-office-inspect--forget ()
   "Remove this inspector's panes and registry entry when it is killed."
@@ -569,7 +726,9 @@ a new call that happens to reuse the old call's id."
 
 (define-derived-mode lispm-office-inspect-mode special-mode "Office Inspector"
   "Inspect one Office conversation's work, mailbox and character."
-  (setq-local truncate-lines nil)
+  (setq-local truncate-lines nil
+              truncate-partial-width-windows nil
+              word-wrap t)
   (add-hook 'kill-buffer-hook #'lispm-office-inspect--forget nil t))
 
 (lispm-kit-define-commands lispm-office-inspect-mode
@@ -577,9 +736,15 @@ a new call that happens to reuse the old call's id."
   (lispm-office-inspect-work :key "w" :label "Work")
   (lispm-office-inspect-mailbox :key "m" :label "Mailbox")
   (lispm-office-inspect-character :key "c" :label "Character")
+  (lispm-office-inspect-open-chat :key "o" :label "Open Chat")
   (lispm-office-inspect-compose :key "s" :label "Compose…")
   (lispm-office-inspect-revert :key "g" :label "Refresh")
   (lispm-office-inspect-quit :key "q" :label "Close"))
+
+(lispm-office-inspect--focus-keys lispm-office-inspect-mode-map)
+(define-key lispm-office-inspect-mode-map (kbd "TAB") #'forward-button)
+(define-key lispm-office-inspect-mode-map (kbd "<tab>") #'forward-button)
+(define-key lispm-office-inspect-mode-map (kbd "<backtab>") #'backward-button)
 
 (defun lispm-office-inspect (key &optional tab owner)
   "Inspect stable KEY in TAB, in a buffer belonging to OWNER.
@@ -598,8 +763,7 @@ buffer.  An existing inspector for this owner keeps its selected tab."
             lispm-office-inspect--key (copy-sequence key))
       (when tab
         (unless (memq tab '(work mailbox character)) (user-error "Unknown inspector tab"))
-        (setq lispm-office-inspect--tab tab))
-      (lispm-office-inspect--draw))
+        (setq lispm-office-inspect--tab tab)))
     (let* ((owner-window
             (seq-find (lambda (window) (window-parameter window 'window-side))
                       (get-buffer-window-list owner nil (selected-frame))))
@@ -611,7 +775,8 @@ buffer.  An existing inspector for this owner keeps its selected tab."
                           (window-width . ,(window-total-width owner-window)))
                       '((side . right) (slot . 0))))))
       (set-window-parameter window 'lispm-office-inspector (buffer-name buffer))
-      (select-window window))
+      (select-window window)
+      (with-current-buffer buffer (lispm-office-inspect--draw)))
     buffer))
 
 (defun lispm-office-inspect-follow (owner key)
@@ -651,7 +816,11 @@ The Office calls this from its window visibility callback."
   (when-let* ((buffer (cdr (assq owner lispm-office-inspect--buffers)))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
-      (when (and lispm-office-inspect--dirty (lispm-office-inspect--visible-p))
+      (when (and (lispm-office-inspect--visible-p)
+                 (or lispm-office-inspect--dirty
+                     (and lispm-office-inspect--width
+                          (/= lispm-office-inspect--width
+                              (lispm-office-inspect--available-width)))))
         (lispm-office-inspect--draw)))))
 
 (defun lispm-office-inspect-close (owner)

@@ -5,6 +5,50 @@
 (require 'tab-bar)
 (require 'lispm-office-project-test)
 
+(ert-deftest lispm-office-ui-graphical-keyboard-focus-inspects-selection ()
+  (skip-unless (image-type-available-p 'svg))
+  (lispm-office-project-test--isolated
+    (setq records (seq-take records 2))
+    (let ((lispm-ui-current-palette
+           (lispm-ui-derive-palette "#f4f2e9" "#24251f" "#77796d" "#6363ce"))
+          inspected)
+      (cl-letf (((symbol-function 'lispm-office--graphic-p) (lambda () t))
+                ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'lispm-office--dimensions) (lambda () '(1200 . 700)))
+                ((symbol-function 'lispm-office-inspect-selected)
+                 (lambda (&optional _)
+                   (interactive)
+                   (push lispm-office--selected inspected))))
+        (with-current-buffer (lispm-office)
+          ;; Opening from a conversation must make RET inspect its agent,
+          ;; rather than accidentally activating the first View popup.
+          (should (equal lispm-office--selected '(lispm "source")))
+          (should (= (point) lispm-office--floor-start))
+          (should (eq (key-binding (kbd "RET")) #'lispm-office-inspect-selected))
+          (call-interactively (key-binding (kbd "RET")))
+          (should (equal inspected '((lispm "source"))))
+          ;; An intentional menu focus survives background redraws.
+          (lispm-office-project)
+          (goto-char (point-min))
+          (lispm-office--draw)
+          (should (= (point) (point-min)))
+          (should (eq (key-binding (kbd "RET")) #'lispm-ui-push))
+          ;; Moving to another agent leaves the menu and restores RET's
+          ;; agent action, using the real scene's spatial navigation.
+          (let* ((nodes (plist-get (lispm-office--scene-plan) :nodes))
+                 (here (seq-find (lambda (node) (equal (plist-get node :key) '(lispm "source"))) nodes))
+                 (there (seq-find (lambda (node) (equal (plist-get node :key) '(lispm "idle"))) nodes))
+                 (key (cond ((> (plist-get there :x) (plist-get here :x)) "<right>")
+                            ((< (plist-get there :x) (plist-get here :x)) "<left>")
+                            ((> (plist-get there :y) (plist-get here :y)) "<down>")
+                            (t "<up>"))))
+            (call-interactively (key-binding (kbd key))))
+          (should (equal lispm-office--selected '(lispm "idle")))
+          (should (= (point) lispm-office--floor-start))
+          (should (eq (key-binding (kbd "RET")) #'lispm-office-inspect-selected))
+          (call-interactively (key-binding (kbd "RET")))
+          (should (equal inspected '((lispm "idle") (lispm "source")))))))))
+
 (ert-deftest lispm-office-ui-directory-has-no-conversation-tab-or-session-choice ()
   (lispm-office-project-test--isolated
     (with-current-buffer source (insert "Draft stays here") (goto-char 7))
