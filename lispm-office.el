@@ -215,7 +215,9 @@ Manual desk selections survive updates from the same source identity."
     '(1000 . 600)))
 
 (defun lispm-office--fit-scale ()
-  "Fit the active room or office to its visible window."
+  "Fit the active room or office to its visible window.
+A focused room keeps readable desks even in a short split window;
+scrolling is preferable to collapsing it into the same map tile again."
   (let* ((room (seq-find (lambda (room)
                            (equal (plist-get room :id) lispm-office--room))
                          (plist-get lispm-office--plan :rooms)))
@@ -225,7 +227,8 @@ Manual desk selections survive updates from the same source identity."
                             (plist-get lispm-office--plan :height) 1)))
          (size (lispm-office--dimensions)))
     (setq lispm-office--scale
-          (min 1.5 (/ (float (car size)) width) (/ (float (cdr size)) height)))))
+          (max (if room 1.0 0.08)
+               (min 1.5 (/ (float (car size)) width) (/ (float (cdr size)) height))))))
 
 (defun lispm-office--waiting ()
   "Return waiting records in the agent sidebar's existing order."
