@@ -58,6 +58,8 @@
 (defvar-local lispm-office--all-records nil "Full cheap roster, retained for global seat reservations.")
 (defvar-local lispm-office--records nil "Records visible in the chosen scope.")
 (defvar-local lispm-office--scope 'all "Visible scope: session, project or all.")
+(defvar-local lispm-office--project-root nil "Explicit directory selected from a project folder.")
+(defvar-local lispm-office--working-only nil "Whether Project scope hides agents without current work.")
 (defvar-local lispm-office--state nil "Persistent seats and room allocation.")
 (defvar-local lispm-office--plan nil "Geometry derived from the current snapshot.")
 (defvar-local lispm-office--display-plan nil "Responsive geometry used by the displayed image.")
@@ -217,6 +219,15 @@ Unknown keys and project membership alone never establish a relationship."
             (push id queue))))
       (seq-filter (lambda (record) (gethash (plist-get record :key) seen)) records))))
 
+(defun lispm-office--working-p (record)
+  "Whether RECORD has ongoing work, needs attention or has queued input.
+An explicitly ended conversation is excluded.  Unknown activity alone is
+not evidence of work; this predicate never reads transcripts or processes."
+  (and (or (not (plist-member record :alive)) (plist-get record :alive))
+       (or (memq (plist-get (plist-get record :status) :state) '(working blocked error))
+           (let ((queued (plist-get (plist-get record :mailbox) :queued)))
+             (and (numberp queued) (> queued 0))))))
+
 (defun lispm-office--scoped-records ()
   "Select visible records from the cached full roster, without querying agents."
   (pcase lispm-office--scope
@@ -227,12 +238,18 @@ Unknown keys and project membership alone never establish a relationship."
                                      (equal (plist-get record :key) lispm-office--source-key))
                                    lispm-office--all-records)))
             (root (lispm-office-layout--root
-                   (if source (plist-get source :root)
-                     (if (buffer-live-p lispm-office--source-buffer)
-                         (buffer-local-value 'default-directory lispm-office--source-buffer)
-                       default-directory)))))
+                   (or lispm-office--project-root
+                       (if source (plist-get source :root)
+                         (if (buffer-live-p lispm-office--source-buffer)
+                             (buffer-local-value 'default-directory lispm-office--source-buffer)
+                           default-directory))))))
        (seq-filter (lambda (record)
-                     (equal root (lispm-office-layout--root (plist-get record :root))))
+                     (and (equal root (lispm-office-layout--root (plist-get record :root)))
+                          (or (not lispm-office--project-root)
+                              (not (plist-member record :alive))
+                              (plist-get record :alive))
+                          (or (not lispm-office--working-only)
+                              (lispm-office--working-p record))))
                    lispm-office--all-records)))
     (_ lispm-office--all-records)))
 
@@ -280,6 +297,9 @@ Return non-nil when scope contents or selection changed."
       (cond
        ((eq lispm-office--scope 'session)
         (setq lispm-office--room (plist-get source :room)))
+       ((and lispm-office--project-root (eq lispm-office--scope 'project)
+             (= (length (plist-get lispm-office--plan :rooms)) 1))
+        (setq lispm-office--room (plist-get (car (plist-get lispm-office--plan :rooms)) :id)))
        ((or prefer-source
             (not (seq-find (lambda (room) (equal lispm-office--room (plist-get room :id)))
                            (plist-get lispm-office--plan :rooms))))
@@ -300,20 +320,22 @@ Return non-nil when scope contents or selection changed."
   "Follow SOURCE's identity and recompute scope from the full cached roster.
 An unknown session stays empty.  Manual selection survives updates while it
 remains in scope; switching session returns to Session scope."
-  (let* ((new-source (not (eq source lispm-office--source-buffer)))
-         (key (and (lispm-office--source-p source) (lispm-office--context-key source)))
-         (known (and key (seq-find (lambda (record) (equal key (plist-get record :key)))
-                                  lispm-office--all-records)))
-         (new-session (or (and new-source
-                               (not (and key (equal key lispm-office--source-key))))
-                          (and key (consp lispm-office--source-key)
-                               (not (equal key lispm-office--source-key)))))
-         (changed (or new-session (not (equal (and known key) lispm-office--source-key)))))
-    (when new-session (setq lispm-office--scope 'session))
-    (setq lispm-office--source-buffer source lispm-office--source-key (and known key))
-    (when changed (setq lispm-office--fit t))
-    (let ((scope-changed (lispm-office--apply-scope changed)))
-      (or changed scope-changed))))
+  (if lispm-office--project-root
+      (lispm-office--apply-scope)
+    (let* ((new-source (not (eq source lispm-office--source-buffer)))
+           (key (and (lispm-office--source-p source) (lispm-office--context-key source)))
+           (known (and key (seq-find (lambda (record) (equal key (plist-get record :key)))
+                                    lispm-office--all-records)))
+           (new-session (or (and new-source
+                                 (not (and key (equal key lispm-office--source-key))))
+                            (and key (consp lispm-office--source-key)
+                                 (not (equal key lispm-office--source-key)))))
+           (changed (or new-session (not (equal (and known key) lispm-office--source-key)))))
+      (when new-session (setq lispm-office--scope 'session))
+      (setq lispm-office--source-buffer source lispm-office--source-key (and known key))
+      (when changed (setq lispm-office--fit t))
+      (let ((scope-changed (lispm-office--apply-scope changed)))
+        (or changed scope-changed)))))
 
 (defun lispm-office--window ()
   "Return a window displaying the current Office buffer."
@@ -420,6 +442,10 @@ remains in scope; switching session returns to Session scope."
         (insert " "))
       (lispm-office--button "Project" #'lispm-office-project)
       (insert " ") (lispm-office--button "All projects" #'lispm-office-overview)
+      (when (eq lispm-office--scope 'project)
+        (insert " ")
+        (lispm-office--button (if lispm-office--working-only "Show idle too" "Working only")
+                             #'lispm-office-toggle-working-only))
       (insert "\n") (lispm-office--button "Fit" #'lispm-office-fit)
       (unless (eq lispm-office--scope 'session)
         (insert " ") (lispm-office--button "Room…" #'lispm-office-choose-room))
@@ -445,6 +471,9 @@ remains in scope; switching session returns to Session scope."
               (insert (format "+%d more (n to cycle)" (- (length waiting) 6)))))
         (insert "No agents need attention."))
       (insert "\n")
+      (when (and lispm-office--project-root (eq lispm-office--scope 'project))
+        (insert (format "Directory: %s%s\n" (abbreviate-file-name lispm-office--project-root)
+                        (if lispm-office--working-only " · Working only" ""))))
       (when (and (lispm-office--source-p lispm-office--source-buffer)
                  (null lispm-office--source-key))
         (insert "Current conversation: waiting for session identity.\n"))
@@ -472,8 +501,14 @@ remains in scope; switching session returns to Session scope."
       (setq lispm-office--size (lispm-office--dimensions))
       (cond
        ((null (plist-get lispm-office--plan :nodes))
-        (insert "No live conversations with a known session id yet.\n"
-                "Start a LispM, Claude Code or Codex conversation, then return here.\n"))
+        (cond ((and (eq lispm-office--scope 'project) lispm-office--working-only)
+               (insert "No agents currently working in this directory.\n"
+                       "Show idle too lists its other open conversations.\n"))
+              ((and (eq lispm-office--scope 'project) lispm-office--project-root)
+               (insert "No active agent sessions with a known identity in this directory.\n"
+                       "Start or resume a conversation to see it here.\n"))
+              (t (insert "No live conversations with a known session id yet.\n"
+                         "Start a LispM, Claude Code or Codex conversation, then return here.\n"))))
        ((lispm-office--graphic-p)
         (let* ((now (float-time))
                (events (mapcar (lambda (event)
@@ -772,6 +807,12 @@ remains in scope; switching session returns to Session scope."
   (interactive)
   (lispm-office--set-scope 'project))
 
+(defun lispm-office-toggle-working-only ()
+  "Include or hide idle conversations in this project's Work view."
+  (interactive)
+  (setq lispm-office--working-only (not lispm-office--working-only))
+  (lispm-office--set-scope 'project))
+
 (defun lispm-office-overview ()
   "Explicitly show every project and live conversation."
   (interactive)
@@ -819,6 +860,7 @@ remains in scope; switching session returns to Session scope."
   "Return public view status without reading transcripts or files."
   (list :agents (length lispm-office--records)
         :scope lispm-office--scope
+        :directory lispm-office--project-root :working-only lispm-office--working-only
         :rooms (length (plist-get lispm-office--plan :rooms))
         :waiting (length (lispm-office--waiting))
         :selected lispm-office--selected :preview lispm-office--demo))
@@ -880,12 +922,13 @@ remains in scope; switching session returns to Session scope."
   (add-hook 'window-state-change-functions #'lispm-office--windows-changed)
   (add-hook 'lispm-ui-palette-changed-hook #'lispm-office--palette-changed))
 
-(defun lispm-office--show (source &optional overview)
+(defun lispm-office--show (source &optional overview directory)
   "Switch SOURCE's existing window to its work view.
-OVERVIEW shows all rooms.  The source buffer and its input remain intact."
+OVERVIEW shows all rooms.  DIRECTORY pins a project's current work instead.
+The source buffer and its input remain intact."
   (unless (require 'lispm-agents-roster nil t)
     (user-error "Update lispm-agent to a version containing the roster API"))
-  (let* ((window (if (or (lispm-office--source-p source)
+  (let* ((window (if (or (and (not directory) (lispm-office--source-p source))
                          (not (boundp 'lispm-agents-main-window-function)))
                      (selected-window)
                    (funcall lispm-agents-main-window-function)))
@@ -903,11 +946,15 @@ OVERVIEW shows all rooms.  The source buffer and its input remain intact."
         (let ((state (lispm-office-layout-read path)))
           (lispm-office-mode)
           (setq lispm-office--state state lispm-office--seat-path path)))
-      (setq lispm-office--source-buffer (and (lispm-office--source-p source) source)
-            lispm-office--scope (if (and (not overview) (lispm-office--source-p source)) 'session 'all)
-            lispm-office--source-key :unresolved lispm-office--selected nil
+      (setq lispm-office--source-buffer (and (not directory) (lispm-office--source-p source) source)
+            lispm-office--project-root directory
+            lispm-office--working-only nil
+            lispm-office--scope (cond (directory 'project)
+                                     ((and (not overview) (lispm-office--source-p source)) 'session)
+                                     (t 'all))
+            lispm-office--source-key (unless directory :unresolved) lispm-office--selected nil
             lispm-office--room nil lispm-office--fit t)
-      (setq default-directory (buffer-local-value 'default-directory source))
+      (setq default-directory (or directory (buffer-local-value 'default-directory source)))
       (lispm-office--observe))
     (unless (eq (window-buffer window) buffer)
       ;; Each window returns to its own conversation, even when the work view
@@ -923,6 +970,18 @@ OVERVIEW shows all rooms.  The source buffer and its input remain intact."
     (select-window window)
     (with-current-buffer buffer (lispm-office-refresh))
     buffer))
+
+;;;###autoload
+(defun lispm-office-open-project (directory)
+  "Show all active agent sessions in DIRECTORY in the host's main window.
+Called interactively, use the current working directory.  This project
+view includes idle agents and stays pinned when other conversations receive
+focus.  The previous
+main-window buffer and its draft can be restored with Conversation or q."
+  (interactive (list default-directory))
+  (unless (and (stringp directory) (not (string-empty-p directory)))
+    (user-error "A project directory is required"))
+  (lispm-office--show (current-buffer) nil (lispm-office-layout--root directory)))
 
 ;;;###autoload
 (defun lispm-office (&optional overview)

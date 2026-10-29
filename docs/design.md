@@ -18,9 +18,26 @@ buffer and its draft, point and scroll position; returning to Conversation, or
 pressing `q` in Work, restores them. This does not change the agent's canonical
 chat or transcript buffer, restart it or end its session.
 
-Work starts in Session scope. It includes the current stable identity and its
-recursive descendants, then follows active wait links in either direction and
-shared request ids. Project membership alone adds no conversations. Parent
+Opening a folder in the Desktop Agents sidebar enters a pinned Project view in
+the host's main window. The triangle alone controls folding. Folder activation
+calls the optional `lispm-desktop-agent-list-open-project-functions` hook; Office
+registers `lispm-office-open-project` while enabled and removes it on disable.
+Desktop falls back to its native directory Agent list without Office; no file
+browser is involved. Desktop is not a required dependency. The entrypoint also
+works directly with the current working directory, without a conversation or a Desktop sidebar.
+
+The directory is explicit and never inferred from the previously selected agent.
+Folder views initially include all active sessions, including idle and done
+agents that remain available, excluding explicitly ended sessions. Working only
+optionally narrows this to working, blocked or error states and queued input.
+Unknown activity by itself does not count as work. Roster updates
+reapply the filter without querying details. Focusing another conversation does
+not retarget this pinned view; changing folders preserves the original return
+buffer and draft. A folder with no active work stays empty.
+
+Work opened from a conversation starts in Session scope. It includes the current
+stable identity and its recursive descendants, then follows active wait links in
+either direction and shared request ids. Project membership alone adds no conversations. Parent
 pointers are followed only downward from the original session: reaching a peer
 through an active request does not bring that peer's unrelated children into the
 group. Traversal is cycle-safe and uses only the cached roster.
@@ -31,9 +48,9 @@ Session returns to the source and its collaborators. A source without a known
 identity has an empty pending Session view until its key arrives, without falling
 back to its project or another agent.
 
-While Work remains visible, selecting another Agent in a second window follows
-that session by default and returns to Session scope. Switching between chat and
-transcript views of the same stable identity preserves the chosen scope and desk.
+While a conversation's Work view remains visible, selecting another Agent in a
+second window follows that session by default and returns to Session scope.
+Switching between chat and transcript views of the same stable identity preserves the chosen scope and desk.
 An existing Inspector follows the selection without changing its Work, Mailbox or
 Character tab or stealing focus. Manual desk selections survive updates while
 they remain in scope; when a request settles and the selected collaborator leaves
