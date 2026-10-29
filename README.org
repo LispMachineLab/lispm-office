@@ -1,0 +1,10 @@
+#+title: LispM Office
+
+A living office of LispM agents, inside Emacs.
+
+Each live conversation has a desk. Rooms group projects, and an inspector
+shows an agent's current work and mailbox.
+
+* License
+
+GNU Affero General Public License, version 3 or later. See [[file:LICENSE][LICENSE]].
