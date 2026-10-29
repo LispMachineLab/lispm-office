@@ -1,9 +1,9 @@
 # LispM Office
 
 Office is a LispM Agent plugin that switches a conversation between Conversation
-and Work views in the same window. One desk represents one live conversation.
-LispM UI supplies drawing
-and controls; LispM Agent owns the conversations, data and actions.
+and Work views in the same window. Work starts with the current conversation and
+its explicit collaborators. One desk represents one live conversation. LispM UI
+supplies drawing and controls; LispM Agent owns conversations, data and actions.
 
 ## Plugin and current work
 
@@ -18,13 +18,27 @@ buffer and its draft, point and scroll position; returning to Conversation, or
 pressing `q` in Work, restores them. This does not change the agent's canonical
 chat or transcript buffer, restart it or end its session.
 
-Work initially selects the current Agent's stable key and room. While it remains
-visible, selecting another Agent in a second window follows that conversation by
-default. An existing Inspector follows the key without changing its Work, Mailbox
-or Character tab or stealing focus. Manual desk selections survive updates from
-the same source. Set `lispm-office-follow-current-agent` to `nil` to disable
-following. A source without a known identity shows a waiting state until the
-roster supplies its key; it does not automatically select an unrelated agent.
+Work starts in Session scope. It includes the current stable identity and its
+recursive descendants, then follows active wait links in either direction and
+shared request ids. Project membership alone adds no conversations. Parent
+pointers are followed only downward from the original session: reaching a peer
+through an active request does not bring that peer's unrelated children into the
+group. Traversal is cycle-safe and uses only the cached roster.
+
+The Session, Project and All projects controls explicitly select scope. Project
+shows the source session's project; All projects shows the whole live roster.
+Session returns to the source and its collaborators. A source without a known
+identity has an empty pending Session view until its key arrives, without falling
+back to its project or another agent.
+
+While Work remains visible, selecting another Agent in a second window follows
+that session by default and returns to Session scope. Switching between chat and
+transcript views of the same stable identity preserves the chosen scope and desk.
+An existing Inspector follows the selection without changing its Work, Mailbox or
+Character tab or stealing focus. Manual desk selections survive updates while
+they remain in scope; when a request settles and the selected collaborator leaves
+scope, selection and Inspector return to the source. Set
+`lispm-office-follow-current-agent` to `nil` to disable following.
 
 The optional Inspector opens in a side window owned by Work. Open Chat prefers
 an existing native chat view; terminal agents open their canonical buffer.
@@ -38,16 +52,27 @@ and removes its observers. It never stops or closes source conversations.
 
 ## Identity and layout
 
-The stable identity is `(KIND SESSION-ID)`. Rooms belong to project roots; Home
-contains conversations rooted at the home directory. Characters without an open
-conversation are not included. A terminal whose session id is not known appears
-in the Starting line until its real identity arrives.
+The stable identity is `(KIND SESSION-ID)`. The full cheap roster is retained for
+global seat reservations; visible records and geometry are derived separately
+from the chosen scope. Characters without an open conversation are not included.
+Project and All projects group rooms by project root, including Home for the home
+directory. An unidentified terminal can appear in those explicit overviews'
+Starting line; Session scope remains empty until its source identity is known.
 
-Each 450 × 454 room holds four pods of four desks. New children prefer their
-parent’s pod, then its room. Full projects gain annexes. Room cells append in a
-fixed three-column grid; existing desks stay put even when the roster order or
-status changes. A changed root moves only that conversation. Missing agents keep
-reserved seats until the explicit Compact command.
+The persistent seating model uses 450 × 454 rooms, each with four pods of four
+desks. New children prefer their parent's pod, then its room. Full projects gain
+annexes. Reserved room cells append in a fixed three-column grid; existing seat
+identities survive roster reordering and status changes. A changed root moves
+only that conversation. Missing agents keep reservations until Compact. Compact
+uses the full live roster, so it cannot remove another scope's live desks.
+
+Session scope places its collaborators in one transient display room, even when
+their actual project roots differ. It preserves each record's identity and root
+and never rewrites saved seats. Fit derives a responsive scene from that room or
+the selected project room and the window's measured available width and height.
+Desks reflow to fill the pane; avatars and text scale uniformly. When a pane is
+too small for readable desks, it scrolls instead of collapsing the focused room
+into an inaccessible map tile.
 
 Seats are saved as validated, versioned Lisp data under `lispm-directory`.
 Reading never evaluates forms. Writes use a private temporary file and atomic
@@ -60,7 +85,11 @@ for a manual refresh or close to retry.
 no roster observer. Office subscribes to `lispm-agents-roster-change-functions`
 while a live Work view is open. Leaving the last Work view removes that observer.
 Preview buffers do not subscribe.
-The waiting order comes from `lispm-agents-waiting-buffers`.
+Counts, waiting strip, selection, actions and animation use only visible records.
+The waiting order comes from `lispm-agents-waiting-buffers`, filtered to scope.
+Source changes, roster refreshes and settled requests recompute that scope
+without fetching work details. Cached message animations are discarded when
+either endpoint leaves the visible group.
 
 Only an opened, visible Inspector calls `lispm-agents-roster-details`, for its
 selected key. Hidden inspectors defer reads. Work shows pending and recent calls
@@ -78,10 +107,22 @@ explicitly discloses that queued inputs are cleared.
 
 ## Rendering and resource use
 
-SVG and hit testing share one projection. Desk view starts at scale 0.72, Floor
+SVG, hit testing, keyboard movement and animation share the displayed scene and
+projection. Scope controls and drawing controls occupy separate toolbar rows;
+their actual pixel height is measured before fitting the remaining buffer area.
+Desk view starts at scale 0.72, Floor
 at 0.45, and Map below that; image dimensions are capped at 4096 pixels and the
 effective scale controls both rendering and interaction. A map selection enters
 its room. Text mode uses the same records, stable identity and commands.
+
+Workers use 16 distinct 16 × 16 pixel sprites with varied hairstyles,
+accessories, skin, hair and clothing colors. Each newly seen stable session key
+receives an index from a shuffled deck; the first 16 identities receive distinct
+portraits. An in-memory identity map keeps that assignment across redraws,
+renaming, scope changes, roster refreshes and theme changes. It is separate from
+the image cache and is not saved to disk, so restarting Emacs randomizes the
+assignments again. At Desk zoom, a configured avatar takes precedence over the
+sprite's head.
 
 The floor never reads transcripts. Cached avatar data avoids filesystem reads
 on animation ticks. There is no roster polling or global post-command hook.
@@ -89,7 +130,8 @@ One 250 ms animation timer runs only for visible working desks or actual message
 events with visible endpoints. Map, text, hidden and idle views stop it. Events
 are sequence-deduplicated, expire after one second and have a bounded queue.
 The palette is initialized through LispM UI's public API. Palette changes
-invalidate drawing resources. All colours and controls come from LispM UI.
+invalidate drawing resources without changing portrait assignments. The room and
+controls use LispM UI's palette; sprite colors distinguish individual workers.
 
 ## Dependency and distribution
 

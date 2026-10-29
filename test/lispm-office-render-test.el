@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'lispm-office-render)
+(require 'xml)
 
 (defun lispm-office-render-test--plan ()
   "Return a small drawing fixture with two rooms and three agents."
@@ -120,6 +121,124 @@
       (lispm-office-render-clear-cache)
       (lispm-office-render--avatar (svg-create 100 100) "/tmp/character.svg" 0 0)
       (should (= reads 2)))))
+
+(ert-deftest lispm-office-render-native-name-keeps-session-suffix ()
+  (dolist (example '(("assistant@long-workspace-name<2>" . "<2>")
+                     ("pair-programmer@long-workspace-name<123>" . "<123>")))
+    (let ((plan (lispm-office-render-test--plan)))
+      (setf (plist-get (car (plist-get plan :nodes)) :name) (car example))
+      (let ((text (with-temp-buffer
+                    (svg-print (lispm-office-render-svg plan '(lispm "a") 1 0))
+                    (dom-texts (car (xml-parse-region (point-min) (point-max)))))))
+        (should (string-match-p (regexp-quote (cdr example)) text))
+        (should-not (string-match-p "long-workspace-name" text))))))
+
+(ert-deftest lispm-office-render-worker-preserves-configured-svg-avatar ()
+  (skip-unless (fboundp 'libxml-parse-xml-region))
+  (let ((avatar (make-temp-file
+                 "lispm-office-avatar-" nil ".svg"
+                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><circle id=\"configured-avatar-mark\" cx=\"9\" cy=\"9\" r=\"8\" fill=\"#123456\"/></svg>"))
+        (lispm-office-render--avatars (make-hash-table :test #'equal))
+        (plan (lispm-office-render-test--plan)))
+    (unwind-protect
+        (progn
+          (setf (plist-get (car (plist-get plan :nodes)) :avatar) avatar)
+          (should (dom-by-id (lispm-office-render-svg plan '(lispm "a") 1 0)
+                             "configured-avatar-mark"))
+          ;; The working pose must keep the configured face from cache,
+          ;; even when its original file is no longer available.
+          (delete-file avatar)
+          (should (dom-by-id (lispm-office-render-svg plan '(lispm "a") 1 1)
+                             "configured-avatar-mark")))
+      (when (file-exists-p avatar) (delete-file avatar)))))
+
+(ert-deftest lispm-office-render-pixel-catalog-has-distinct-grid-portraits ()
+  (should (>= (length lispm-office-render--portraits) 16))
+  (let (ids drawings)
+    (seq-doseq (portrait lispm-office-render--portraits)
+      (push (plist-get portrait :id) ids)
+      (let ((pixels (plist-get portrait :pixels))
+            (svg (svg-create 32 32)))
+        (should (= (length pixels) 16))
+        (seq-doseq (row pixels)
+          (should (stringp row))
+          (should (= (length row) 16))
+          (should (string-match-p "\\`[.OHhSsEWAaC]+\\'" row)))
+        (lispm-office-render--pixel-portrait svg portrait 0 0 2)
+        (let* ((group (car (dom-by-class svg "office-pixel-portrait")))
+               (rectangles (dom-by-tag group 'rect)))
+          (should group)
+          (should (equal (dom-attr group 'shape-rendering) "crispEdges"))
+          (should rectangles)
+          (dolist (tag '(circle ellipse path polygon image))
+            (should-not (dom-by-tag group tag)))
+          (dolist (rect rectangles)
+            (dolist (attribute '(x y width height))
+              (let ((value (dom-attr rect attribute)))
+                (should (numberp value))
+                (should (zerop (mod value 2)))))
+            (should (<= 0 (dom-attr rect 'x)))
+            (should (<= 0 (dom-attr rect 'y)))
+            (should (<= (+ (dom-attr rect 'x) (dom-attr rect 'width)) 32))
+            (should (<= (+ (dom-attr rect 'y) (dom-attr rect 'height)) 32)))
+          ;; Compare the visible marks, excluding the identifying metadata.
+          (push rectangles drawings))))
+    (should (= (length (delete-dups ids)) (length lispm-office-render--portraits)))
+    (should (= (length (delete-dups drawings)) (length lispm-office-render--portraits)))))
+
+(ert-deftest lispm-office-render-random-portrait-pool-is-unique-and-stable ()
+  (let ((lispm-office-render--portrait-assignments (make-hash-table :test #'equal))
+        (lispm-office-render--portrait-pool nil)
+        (random-calls 0)
+        indexes)
+    ;; A controlled random source makes this independent of chance while
+    ;; still proving that allocation actually consumes randomness.
+    (cl-letf (((symbol-function 'random)
+               (lambda (limit)
+                 (should (and (integerp limit) (> limit 0)))
+                 (cl-incf random-calls)
+                 0)))
+      (dotimes (index (length lispm-office-render--portraits))
+        (let* ((key (list 'lispm (format "portrait-test-%d" index)))
+               (node (list :key key :name "Original name"))
+               (assigned (lispm-office-render--portrait-index node)))
+          (should (integerp assigned))
+          (should (<= 0 assigned))
+          (should (< assigned (length lispm-office-render--portraits)))
+          (push assigned indexes)
+          (should (= assigned
+                     (lispm-office-render--portrait-index
+                      (list :key (copy-tree key) :name "Renamed session"))))))
+      (should (> random-calls 0))
+      (should (= (length (delete-dups indexes)) (length lispm-office-render--portraits)))
+      ;; Exhaustion starts another valid pool, not a missing portrait.
+      (let ((next (lispm-office-render--portrait-index '(:key (codex "next-pool")))))
+        (should (<= 0 next))
+        (should (< next (length lispm-office-render--portraits)))))))
+
+(ert-deftest lispm-office-render-pixel-identity-survives-redraw-theme-and-cache ()
+  (let* ((lispm-office-render--portrait-assignments (make-hash-table :test #'equal))
+         (lispm-office-render--portrait-pool nil)
+         (lispm-office-render--avatars (make-hash-table :test #'equal))
+         (plan (lispm-office-render-test--plan))
+         (first (car (plist-get plan :nodes)))
+         (identity (dom-attr
+                    (car (dom-by-class (lispm-office-render-svg plan nil 1 0)
+                                       "office-pixel-portrait"))
+                    'data-portrait)))
+    (should identity)
+    (setf (plist-get first :name) "Renamed@workspace<22>")
+    (dolist (colors '(("#ffffff" "#111111" "#666666" "#552288")
+                      ("#222222" "#eeeeee" "#bbbbbb" "#aa88ee")))
+      (let ((lispm-ui-current-palette (apply #'lispm-ui-derive-palette colors)))
+        (lispm-office-render-clear-cache)
+        (dolist (phase '(0 1 2))
+          (should (equal identity
+                         (dom-attr
+                          (car (dom-by-class (lispm-office-render-svg plan nil 1 phase)
+                                             "office-pixel-portrait"))
+                          'data-portrait))))))
+    (should (= (hash-table-count lispm-office-render--portrait-assignments) 3))))
 
 (defun lispm-office-render-test--responsive-plan ()
   "Return three live desks in room zero and one untouched second room."

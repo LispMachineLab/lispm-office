@@ -465,7 +465,11 @@ model requests, messages and permission actions must never run."
       (lispm-office-plugin-mode 1)
       (lispm-office-toggle)
       (let ((office (get-buffer "*LispM Office*")))
-        (with-current-buffer office (lispm-office--select other-key))
+        (with-current-buffer office
+          ;; The manual-selection invariant applies after explicitly widening
+          ;; the view to include this otherwise unrelated conversation.
+          (lispm-office-project)
+          (lispm-office--select other-key))
         (setf (lispm-agent-status agent) "A new status on the same conversation")
         (lispm-agents-roster-notify agent '(status))
         (lispm-agents-roster--flush)

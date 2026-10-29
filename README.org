@@ -1,8 +1,8 @@
 #+title: LispM Office
 
-A LispM Agent plugin that adds a Work view to your conversation. Each live
-conversation has a desk; rooms group projects, and an inspector shows what an
-agent is doing and what is in its mailbox. LispM UI draws the controls and view
+A LispM Agent plugin that adds a Work view to your current conversation and its
+explicit collaborators. Each conversation has a desk, and an inspector shows its
+current work and mailbox. LispM UI draws the controls and view
 in graphical Emacs and on a text terminal.
 
 * Using it
@@ -12,17 +12,39 @@ Enable the plugin, then click =Conversation= or =Work= in the agent's header.
 restores the source buffer, draft, point and scroll position; the agent keeps
 running throughout. =q= in Work also returns to the conversation.
 
-Work selects the current agent's desk and room. Click a desk or press =RET= to
-open its optional Inspector side window with Work, Mailbox and Character tabs.
+Work starts in =Session= scope: the current agent, its descendants, and agents
+connected by active requests or waits. Sharing a project directory alone never
+adds another conversation. Waiting for a new session identity shows an empty
+pending view. =Project= explicitly shows the source conversation's project;
+=All projects= shows the whole roster; =Session= returns to the current task.
+
+Session scope follows child relationships downward from the current agent, then
+active wait links in either direction and shared request ids. Parent pointers
+alone do not add ancestors, and linked peers do not bring unrelated children.
+Cross-project collaborators share the session's display room. Project and All projects group
+desks by project; these display choices never alter saved global seats.
+
+Click a desk or press =RET= to open its optional Inspector side window with Work,
+Mailbox and Character tabs.
 In Fit mode, the room fills the available buffer area and its desks reflow when
 the window changes size. Avatars and text keep their proportions; saved seat
 identities stay unchanged. =Help= lists the view's keyboard commands.
+
+Workers use 16 pixel portraits with different hairstyles, accessories and colors.
+New session identities receive randomized portraits from a shuffled set, so the
+first 16 get different looks. A session keeps its portrait through refreshes,
+scope changes and theme changes. Assignments last for the Emacs session and are
+randomized again after restarting Emacs. At detailed desk zoom, a configured
+avatar replaces the pixel portrait's head.
+
 Open Chat navigates to the selected conversation. If you select another agent
-in a second window while Work is visible, it follows that agent by default; set
+in a second window while Work is visible, it follows that agent in Session scope;
+switching between the same session's chat and transcript preserves your scope. Set
 =lispm-office-follow-current-agent= to =nil= to keep your desk selection.
 
-The waiting strip and =n= lead to agents that need you. Rooms grow automatically,
-with a map overview when there are many agents. Seats survive restarts; only
+The count, waiting strip, inspector and actions use the selected scope. =n= leads
+to scoped agents that need you. Rooms grow automatically, with a map overview
+when there are many agents. Seats survive restarts; only
 =Compact Saved Seats…= removes empty reservations.
 
 | Key             | Action                                      |
@@ -36,7 +58,8 @@ with a map overview when there are many agents. Seats survive restarts; only
 | A               | Preview and approve this agent’s pending calls |
 | x               | Confirm stopping this agent and clearing its queue |
 | + / - / 0       | Zoom in / out / fit                         |
-| h / r           | All rooms / choose a room                   |
+| S / P / h       | Session / Project / All projects            |
+| r               | Choose a room within the current scope      |
 | t               | Toggle text view                            |
 | g / q           | Refresh / return to the conversation        |
 

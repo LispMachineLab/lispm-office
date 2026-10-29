@@ -55,7 +55,9 @@
   :type 'number)
 
 (defvar lispm-office--buffers nil "Open Office buffers, including previews.")
-(defvar-local lispm-office--records nil "Last cheap live snapshot.")
+(defvar-local lispm-office--all-records nil "Full cheap roster, retained for global seat reservations.")
+(defvar-local lispm-office--records nil "Records visible in the chosen scope.")
+(defvar-local lispm-office--scope 'all "Visible scope: session, project or all.")
 (defvar-local lispm-office--state nil "Persistent seats and room allocation.")
 (defvar-local lispm-office--plan nil "Geometry derived from the current snapshot.")
 (defvar-local lispm-office--display-plan nil "Responsive geometry used by the displayed image.")
@@ -170,27 +172,148 @@ Native chat buffers use their owner because the roster indexes transcripts."
        (or (bound-and-true-p lispm-chat-agent)
            (bound-and-true-p lispm-session-agent) buffer)))))
 
-(defun lispm-office--focus-source (source)
-  "Follow SOURCE when its identity changes; return non-nil on selection change.
-An unknown terminal identity stays pending until a roster update resolves it.
-Manual desk selections survive updates from the same source identity."
-  (unless (eq source lispm-office--source-buffer)
-    (setq lispm-office--source-buffer source lispm-office--source-key :unresolved))
-  (when (lispm-office--source-p source)
-    (let* ((key (lispm-office--context-key source))
-           (node (and key (seq-find (lambda (node) (equal key (plist-get node :key)))
-                                    (plist-get lispm-office--plan :nodes)))))
+(defun lispm-office--session-records (records key)
+  "Return KEY's explicit collaboration group from RECORDS.
+Start with KEY and its descendants, never its ancestors.  Then follow active
+wait links in either direction and shared request ids.  A collaborator found
+through those links does not bring its unrelated descendants into the group.
+Unknown keys and project membership alone never establish a relationship."
+  (let ((index (make-hash-table :test #'equal))
+        (children (make-hash-table :test #'equal))
+        (links (make-hash-table :test #'equal))
+        (requests (make-hash-table :test #'equal))
+        (seen (make-hash-table :test #'equal))
+        queue)
+    (dolist (record records)
+      (when-let* ((id (plist-get record :key)))
+        (puthash id record index)
+        (when-let* ((parent (plist-get record :parent)))
+          (push id (gethash parent children)))
+        (dolist (target (append (plist-get record :waits-on)
+                               (plist-get record :waited-on-by)))
+          (when target
+            (push target (gethash id links))
+            (push id (gethash target links))))
+        (dolist (request (plist-get record :request-ids))
+          (when request (push id (gethash request requests))))))
+    (when (and key (gethash key index))
+      (setq queue (list key))
+      (while queue
+        (let ((id (pop queue)))
+          (unless (gethash id seen)
+            (puthash id t seen)
+            (setq queue (append (gethash id children) queue)))))
+      ;; Connect each request through one endpoint, avoiding a quadratic clique.
+      (maphash (lambda (_request ids)
+                 (dolist (id (cdr ids))
+                   (push id (gethash (car ids) links))
+                   (push (car ids) (gethash id links))))
+               requests)
+      (maphash (lambda (id _value) (push id queue)) seen)
+      (while queue
+        (dolist (id (gethash (pop queue) links))
+          (when (and (gethash id index) (not (gethash id seen)))
+            (puthash id t seen)
+            (push id queue))))
+      (seq-filter (lambda (record) (gethash (plist-get record :key) seen)) records))))
+
+(defun lispm-office--scoped-records ()
+  "Select visible records from the cached full roster, without querying agents."
+  (pcase lispm-office--scope
+    ('session (lispm-office--session-records lispm-office--all-records lispm-office--source-key))
+    ('project
+     (let* ((source (and lispm-office--source-key
+                         (seq-find (lambda (record)
+                                     (equal (plist-get record :key) lispm-office--source-key))
+                                   lispm-office--all-records)))
+            (root (lispm-office-layout--root
+                   (if source (plist-get source :root)
+                     (if (buffer-live-p lispm-office--source-buffer)
+                         (buffer-local-value 'default-directory lispm-office--source-buffer)
+                       default-directory)))))
+       (seq-filter (lambda (record)
+                     (equal root (lispm-office-layout--root (plist-get record :root))))
+                   lispm-office--all-records)))
+    (_ lispm-office--all-records)))
+
+(defun lispm-office--scoped-plan ()
+  "Make display geometry without changing global seat reservations.
+A session's collaborators share one display room, including cross-project
+requests.  Each node keeps its actual roster fields, including its project."
+  (let ((plan (lispm-office-layout-plan lispm-office--state lispm-office--records)))
+    (if (and (eq lispm-office--scope 'session) (plist-get plan :nodes))
+        (let* ((nodes (plist-get plan :nodes))
+               (source (seq-find (lambda (node)
+                                   (equal lispm-office--source-key (plist-get node :key))) nodes))
+               (room (copy-tree (seq-find (lambda (item)
+                                            (equal (plist-get item :id) (plist-get source :room)))
+                                          (plist-get plan :rooms)))))
+          (cl-loop for node in nodes for slot from 0 do
+                   (setf (plist-get node :room) (plist-get room :id)
+                         (plist-get node :slot) slot))
+          (setf (plist-get room :label) "Session collaboration"
+                (plist-get room :nodes) nodes
+                (plist-get plan :rooms) (list room))
+          plan)
+      plan)))
+
+(defun lispm-office--apply-scope (&optional prefer-source)
+  "Rebuild visible data and selection; PREFER-SOURCE selects the source desk.
+Return non-nil when scope contents or selection changed."
+  (let ((old-records lispm-office--records)
+        (old-selected lispm-office--selected)
+        (old-plan lispm-office--plan)
+        (old-room lispm-office--room))
+    (setq lispm-office--records (lispm-office--scoped-records)
+          lispm-office--plan (lispm-office--scoped-plan))
+    ;; An unchanged source-window event does not repaint.  Keep the plan's
+    ;; identity so hit tests continue using the geometry of its displayed SVG.
+    (when (equal lispm-office--plan old-plan) (setq lispm-office--plan old-plan))
+    (let* ((nodes (plist-get lispm-office--plan :nodes))
+           (source (seq-find (lambda (node) (equal lispm-office--source-key (plist-get node :key))) nodes)))
+      (unless (and (not prefer-source)
+                   (seq-find (lambda (node) (equal lispm-office--selected (plist-get node :key))) nodes))
+        (setq lispm-office--selected
+              (or (plist-get source :key)
+                  (and (not (eq lispm-office--scope 'session))
+                       (plist-get (car nodes) :key)))))
       (cond
-       ((and node (not (equal key lispm-office--source-key)))
-        (setq lispm-office--source-key key lispm-office--selected key
-              lispm-office--room (plist-get node :room) lispm-office--fit t)
-        (lispm-office-inspect-follow (current-buffer) key)
-        t)
-       ((and (not node) lispm-office--source-key)
-        (setq lispm-office--source-key nil lispm-office--selected nil
-              lispm-office--room nil lispm-office--fit t)
-        (lispm-office-inspect-follow (current-buffer) nil)
-        t)))))
+       ((eq lispm-office--scope 'session)
+        (setq lispm-office--room (plist-get source :room)))
+       ((or prefer-source
+            (not (seq-find (lambda (room) (equal lispm-office--room (plist-get room :id)))
+                           (plist-get lispm-office--plan :rooms))))
+        (setq lispm-office--room nil))))
+    (when (or (not (equal old-selected lispm-office--selected))
+              (when-let* ((inspector (cdr (assq (current-buffer) lispm-office-inspect--buffers)))
+                          ((buffer-live-p inspector)))
+                (let ((key (buffer-local-value 'lispm-office-inspect--key inspector)))
+                  (not (seq-find (lambda (record) (equal key (plist-get record :key)))
+                                 lispm-office--records)))))
+      (lispm-office-inspect-follow (current-buffer) lispm-office--selected))
+    (or (not (equal old-records lispm-office--records))
+        (not (eq old-plan lispm-office--plan))
+        (not (equal old-selected lispm-office--selected))
+        (not (equal old-room lispm-office--room)))))
+
+(defun lispm-office--focus-source (source)
+  "Follow SOURCE's identity and recompute scope from the full cached roster.
+An unknown session stays empty.  Manual selection survives updates while it
+remains in scope; switching session returns to Session scope."
+  (let* ((new-source (not (eq source lispm-office--source-buffer)))
+         (key (and (lispm-office--source-p source) (lispm-office--context-key source)))
+         (known (and key (seq-find (lambda (record) (equal key (plist-get record :key)))
+                                  lispm-office--all-records)))
+         (new-session (or (and new-source
+                               (not (and key (equal key lispm-office--source-key))))
+                          (and key (consp lispm-office--source-key)
+                               (not (equal key lispm-office--source-key)))))
+         (changed (or new-session (not (equal (and known key) lispm-office--source-key)))))
+    (when new-session (setq lispm-office--scope 'session))
+    (setq lispm-office--source-buffer source lispm-office--source-key (and known key))
+    (when changed (setq lispm-office--fit t))
+    (let ((scope-changed (lispm-office--apply-scope changed)))
+      (or changed scope-changed))))
 
 (defun lispm-office--window ()
   "Return a window displaying the current Office buffer."
@@ -288,12 +411,18 @@ Manual desk selections survive updates from the same source identity."
       (setq lispm-office--dirty nil)
       (erase-buffer)
       (insert (propertize (if lispm-office--demo "Office — Preview" "Agent Work") 'face 'bold))
-      (insert (format "   %d conversations · %d rooms\n"
+      (insert (format " · %s   %d conversations · %d rooms\n"
+                      (pcase lispm-office--scope ('session "Session") ('project "Project") (_ "All projects"))
                       (length lispm-office--records)
                       (length (plist-get lispm-office--plan :rooms))))
-      (lispm-office--button "Fit" #'lispm-office-fit)
-      (insert " ") (lispm-office--button "All rooms" #'lispm-office-overview)
-      (insert " ") (lispm-office--button "Room…" #'lispm-office-choose-room)
+      (when (lispm-office--source-p lispm-office--source-buffer)
+        (lispm-office--button "Session" #'lispm-office-session)
+        (insert " "))
+      (lispm-office--button "Project" #'lispm-office-project)
+      (insert " ") (lispm-office--button "All projects" #'lispm-office-overview)
+      (insert "\n") (lispm-office--button "Fit" #'lispm-office-fit)
+      (unless (eq lispm-office--scope 'session)
+        (insert " ") (lispm-office--button "Room…" #'lispm-office-choose-room))
       (insert " ") (lispm-office--button "−" #'lispm-office-zoom-out)
       (insert " ") (lispm-office--button "+" #'lispm-office-zoom-in)
       (insert " ") (lispm-office--button (if lispm-office--text "Pictures" "Text") #'lispm-office-toggle-text)
@@ -363,7 +492,7 @@ Manual desk selections survive updates from the same source identity."
       (unless (lispm-office--graphic-p)
         (insert "\nArrows: desk   n: waiting   RET: inspect   w/m/c: tabs\n"
                 "o: chat   s: message   a/A: approve/all   d: deny\n"
-                "+/−: zoom   0: fit   h: overview   g: refresh   q: return\n"))
+                "+/−: zoom   0: fit   S/P/h: Session/Project/All   g: refresh   q: return\n"))
       (goto-char (min old-point (point-max)))
       (when window (set-window-hscroll window 0)))))
 
@@ -391,10 +520,20 @@ Manual desk selections survive updates from the same source identity."
     (setq lispm-office--timer nil)))
 
 (defun lispm-office--prune-flights ()
-  "Discard expired message animations without scheduling work."
+  "Discard expired or out-of-scope message animations without querying agents."
   (setq lispm-office--flights
-        (seq-filter (lambda (event) (< (- (float-time) (plist-get event :started)) 1.0))
+        (seq-filter (lambda (event)
+                      (and (< (- (float-time) (plist-get event :started)) 1.0)
+                           (lispm-office--event-in-scope-p event)))
                     lispm-office--flights)))
+
+(defun lispm-office--event-in-scope-p (event)
+  "Whether both known endpoints of EVENT belong to the visible scope."
+  (cl-every (lambda (field)
+              (let ((record (lispm-office-render--endpoint
+                             (plist-get event field) (or lispm-office--all-records lispm-office--records))))
+                (and record (memq record lispm-office--records))))
+            '(:from :to)))
 
 (defun lispm-office--tick (buffer)
   "Advance BUFFER's visible animation; never read agent data."
@@ -411,18 +550,8 @@ Manual desk selections survive updates from the same source identity."
   "Accept RECORDS and one batch EVENT, preserving seats and selection."
   (let* ((state (lispm-office-layout-reconcile lispm-office--state records))
          (changed (not (equal state lispm-office--state))))
-    (setq lispm-office--records records lispm-office--state state
-          lispm-office--plan (lispm-office-layout-plan state records))
-    (unless (seq-find (lambda (r) (equal lispm-office--selected (plist-get r :key)))
-                      (plist-get lispm-office--plan :nodes))
-      (setq lispm-office--selected
-            (unless lispm-office--source-buffer
-              (plist-get (car (plist-get lispm-office--plan :nodes)) :key))))
-    (when (and lispm-office--room
-               (not (seq-find (lambda (r) (equal lispm-office--room (plist-get r :id)))
-                              (plist-get lispm-office--plan :rooms))))
-      (setq lispm-office--room nil))
-    (unless lispm-office--demo
+    (setq lispm-office--all-records records lispm-office--state state)
+    (if lispm-office--demo (lispm-office--apply-scope)
       (lispm-office--focus-source lispm-office--source-buffer))
     (when (and changed (not lispm-office--demo) lispm-office--seat-path)
       (setq lispm-office--unsaved t)
@@ -432,6 +561,7 @@ Manual desk selections survive updates from the same source identity."
         (when (and (numberp sequence) (> sequence lispm-office--sequence))
           (setq lispm-office--sequence sequence)
           (when (and lispm-office-animate (lispm-office--graphic-p)
+                     (lispm-office--event-in-scope-p message)
                      (memq (plist-get message :type) '(message-queued message-taken message-delivered)))
             (push (plist-put (copy-sequence message) :started (float-time)) lispm-office--flights)))))
     ;; A burst cannot leave an unbounded visual history.
@@ -540,7 +670,11 @@ Manual desk selections survive updates from the same source identity."
 (defun lispm-office--key ()
   "Return the selected live key, refusing preview actions."
   (when lispm-office--demo (user-error "This is a preview; open M-x lispm-office for live agents"))
-  (or lispm-office--selected (user-error "No agent selected")))
+  (if (and lispm-office--selected
+           (seq-find (lambda (record) (equal lispm-office--selected (plist-get record :key)))
+                     lispm-office--records))
+      lispm-office--selected
+    (user-error "No agent selected in this scope")))
 
 (defun lispm-office-inspect-selected (&optional tab)
   "Inspect the selected agent on TAB."
@@ -620,10 +754,28 @@ Manual desk selections survive updates from the same source identity."
     (set-window-start window (point-min))
     (set-window-vscroll window 0 t))
   (lispm-office--sync-timer))
-(defun lispm-office-overview ()
-  "Show every occupied room."
+(defun lispm-office--set-scope (scope)
+  "Switch to SCOPE using the cached roster, then fit its complete view."
+  (setq lispm-office--scope scope lispm-office--room nil lispm-office--fit t)
+  (lispm-office--apply-scope t)
+  (lispm-office-fit))
+
+(defun lispm-office-session ()
+  "Show the current session and its explicit collaborators."
   (interactive)
-  (setq lispm-office--room nil) (lispm-office-fit))
+  (unless (lispm-office--source-p lispm-office--source-buffer)
+    (user-error "Open Work from an agent conversation to select a session"))
+  (lispm-office--set-scope 'session))
+
+(defun lispm-office-project ()
+  "Show all conversations in the source session's project."
+  (interactive)
+  (lispm-office--set-scope 'project))
+
+(defun lispm-office-overview ()
+  "Explicitly show every project and live conversation."
+  (interactive)
+  (lispm-office--set-scope 'all))
 (defun lispm-office--zoom (factor)
   "Change the drawing scale by FACTOR."
   (setq lispm-office--fit nil lispm-office--scale (max 0.08 (min 2.5 (* lispm-office--scale factor))))
@@ -648,12 +800,12 @@ Manual desk selections survive updates from the same source identity."
   "Confirm removing empty seats and repacking the occupied office."
   (interactive)
   (when (lispm-ui-confirm "Compact the office? Saved empty seats will be removed and agents may move.")
-    (setq lispm-office--state (lispm-office-layout-compact lispm-office--state lispm-office--records))
+    (setq lispm-office--state (lispm-office-layout-compact lispm-office--state lispm-office--all-records))
     (when (and (not lispm-office--demo) lispm-office--seat-path)
       (setq lispm-office--unsaved t)
       (lispm-office--save-seats))
     (setq lispm-office--room nil)
-    (lispm-office--ingest lispm-office--records)))
+    (lispm-office--ingest lispm-office--all-records)))
 
 (defun lispm-office-refresh ()
   "Read one fresh roster snapshot and update the selected inspector."
@@ -666,6 +818,7 @@ Manual desk selections survive updates from the same source identity."
 (defun lispm-office-status ()
   "Return public view status without reading transcripts or files."
   (list :agents (length lispm-office--records)
+        :scope lispm-office--scope
         :rooms (length (plist-get lispm-office--plan :rooms))
         :waiting (length (lispm-office--waiting))
         :selected lispm-office--selected :preview lispm-office--demo))
@@ -709,7 +862,9 @@ Manual desk selections survive updates from the same source identity."
   (lispm-office-zoom-in :key ("+" "=") :label "Zoom In")
   (lispm-office-zoom-out :key "-" :label "Zoom Out")
   (lispm-office-fit :key "0" :label "Fit")
-  (lispm-office-overview :key "h" :label "All Rooms")
+  (lispm-office-session :key "S" :label "Session")
+  (lispm-office-project :key "P" :label "Project")
+  (lispm-office-overview :key "h" :label "All Projects")
   (lispm-office-choose-room :key "r" :label "Choose Room…")
   (lispm-office-toggle-text :key "t" :label "Text View" :style toggle :selected lispm-office--text)
   (lispm-office-compact :label "Compact Saved Seats…")
@@ -748,8 +903,8 @@ OVERVIEW shows all rooms.  The source buffer and its input remain intact."
         (let ((state (lispm-office-layout-read path)))
           (lispm-office-mode)
           (setq lispm-office--state state lispm-office--seat-path path)))
-      (setq lispm-office--source-buffer
-            (and (not overview) (lispm-office--source-p source) source)
+      (setq lispm-office--source-buffer (and (lispm-office--source-p source) source)
+            lispm-office--scope (if (and (not overview) (lispm-office--source-p source)) 'session 'all)
             lispm-office--source-key :unresolved lispm-office--selected nil
             lispm-office--room nil lispm-office--fit t)
       (setq default-directory (buffer-local-value 'default-directory source))
@@ -772,7 +927,7 @@ OVERVIEW shows all rooms.  The source buffer and its input remain intact."
 ;;;###autoload
 (defun lispm-office (&optional overview)
   "Switch the Agent window from conversation to current work.
-With prefix argument OVERVIEW, show all rooms.  Outside an agent buffer,
+With prefix argument OVERVIEW, show all projects.  Outside an agent buffer,
 show the overview.  Toggle back with C-c O or the Conversation control."
   (interactive "P")
   (lispm-office--show (current-buffer) overview))
@@ -785,7 +940,7 @@ show the overview.  Toggle back with C-c O or the Conversation control."
   (let ((buffer (get-buffer-create "*LispM Office Preview*")))
     (with-current-buffer buffer
       (unless (derived-mode-p 'lispm-office-mode) (lispm-office-mode))
-      (setq lispm-office--demo t lispm-office--fit t lispm-office--room nil
+      (setq lispm-office--demo t lispm-office--fit t lispm-office--room nil lispm-office--scope 'all
             header-line-format nil)
       (lispm-office--observe))
     (pop-to-buffer buffer)

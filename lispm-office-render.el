@@ -27,6 +27,291 @@
 (defvar lispm-office-render--avatars (make-hash-table :test #'equal)
   "Local avatar drawings cached until their roster or palette changes.")
 
+(defvar lispm-office-render--portrait-assignments (make-hash-table :test #'equal)
+  "Random portrait indices retained by stable agent key for this Emacs session.")
+
+(defvar lispm-office-render--portrait-pool nil
+  "Remaining indices in the current shuffled portrait deck.")
+
+(defconst lispm-office-render--portraits
+  [
+   (:id side-part :skin "#e9b58e" :hair "#624338" :shirt "#487a9b"
+    :pixels [".....OOOOOO....."
+             "....OHHhhHHO...."
+             "...OHHhhhhHHO..."
+             "...OHHHHHHHHHO.."
+             "...OHHHHHHHHO..."
+             "...OHHHSSHsHO..."
+             "...OHSSSSSssO..."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id teal-bob :skin "#f1c7a3" :hair "#315b63" :shirt "#b56b59"
+    :pixels [".....OOOOOO....."
+             "....OHhhhHHO...."
+             "...OHhhHHHHHO..."
+             "..OHHHHHHHHHHO.."
+             "..OHHHHHHHHHHO.."
+             "..OHHHHSSHHHHO.."
+             "..OHHSSSSSsHHO.."
+             "..OHSSSSSSssHO.."
+             "..OHSESSSSEsHO.."
+             "..OHSESSSSEsHO.."
+             "..OHCSSSSSsCHO.."
+             "..OHSSSssSssHO.."
+             "..OHSssssssSHO.."
+             "..OOOOOOOOOOOO.."
+             "......ssss......"
+             "......SSSS......"])
+   (:id curls :skin "#9a624b" :hair "#302b38" :shirt "#c29547"
+    :pixels ["....OO.OO.OO...."
+             "...OHHOHHOHHO..."
+             "..OHhHHhHHhHHO.."
+             "..OHHHhHHhHHHO.."
+             ".OHhHHHHHHHhHHO."
+             "..OHHHHHHHHHHO.."
+             "..OHHSHHSHHHHO.."
+             "..OHSSSSSSssHO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id ponytail :skin "#f2c1a0" :hair "#c49242" :shirt "#7079ae"
+    :pixels [".....OOOOOO....."
+             "....OHhhhhHO...."
+             "...OHHhhhhHHO..."
+             "...OHHHHHHHHHO.."
+             "...OHHHHHHHHHO.."
+             "...OHHHSSHHHHAA."
+             "...OHSSSSSssHHO."
+             "..OSSSSSSSssSHO."
+             "..OSSESSSSEsSHO."
+             "..OSSESSSSEsSHO."
+             "...OCSSSSSsCOHO."
+             "...OSSSssSssOHO."
+             "...OSssssssSOOO."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id auburn-waves :skin "#e8ad88" :hair "#8b453b" :shirt "#4b8790"
+    :pixels [".....OOOOOO....."
+             "....OHhhhHHO...."
+             "...OHhhHHHHHO..."
+             "..OHHHHHHHHHHO.."
+             "..OHHHHHHHHHHO.."
+             "..OHHHHHSHHHHO.."
+             "..OHHHSSSSsHHO.."
+             "..OHHSSSSSssHO.."
+             ".OHHSESSSSEsHHO."
+             "..OHSESSSSEsHO.."
+             ".OHHCSSSSSsCHHO."
+             "..OHSSSssSssHO.."
+             ".OHHSssssssSHHO."
+             "..OOOOOOOOOOOO.."
+             ".OHH..ssss..HHO."
+             "..OO..SSSS..OO.."])
+   (:id silver-cut :skin "#b97e5b" :hair "#aab5c6" :shirt "#9a6b87"
+    :pixels ["....OOOOOOO....."
+             "....HhhhhHHO...."
+             "...OHHhhhhHHO..."
+             "...OHHHHHHHHHO.."
+             "...OHHHHHHHHO..."
+             "...OHHHSSSssO..."
+             "...OHSSSSSshO..."
+             "..OSSSSSSSshOO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id blue-cap :skin "#d79a70" :hair "#443b3c" :shirt "#4c75ac"
+    :pixels [".....OOOOOO....."
+             "....OAAAAAAO...."
+             "...OAaaaAAAAO..."
+             "...OAaaAAAAAOO.."
+             "...OAAAAAWAAO..."
+             "..OAAAAAAAAAAAO."
+             "..OOOOOOOOOOOOO."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id round-glasses :skin "#a86e51" :hair "#403137" :shirt "#6d8b62"
+    :pixels [".....OOOOOO....."
+             "....OHHhhHHO...."
+             "...OHHhhhhHHO..."
+             "...OHHHHHHHHHO.."
+             "...OHHHHHHHHO..."
+             "...OHHHSSHsHO..."
+             "...OHSSSSSssO..."
+             "..OSSSSSSSssSO.."
+             "..OOEEEOOEEEOO.."
+             "..OSEWEssEWESO.."
+             "...OEEEssEEEO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id violet-buns :skin "#edb998" :hair "#6e4f89" :shirt "#c0838a"
+    :pixels [".....OOOOOO....."
+             "OOOOOHhhhHHOOOOO"
+             "OhHOHhhHHHHHOhHO"
+             "OHHOHHHHHHHHOHHO"
+             "OOOOHHHHHHHHOOOO"
+             "..AAHHHSSHHHAA.."
+             "..OHHSSSSSsHHO.."
+             "..OHSSSSSSssHO.."
+             "..OHSESSSSEsHO.."
+             "..OHSESSSSEsHO.."
+             "..OHCSSSSSsCHO.."
+             "....SSSssSss...."
+             "....SssssssS...."
+             "....OOOOOOOO...."
+             "......ssss......"
+             "......SSSS......"])
+   (:id top-bun :skin "#83533f" :hair "#2e2a37" :shirt "#b9804a"
+    :pixels [".....OOOOOO....."
+             "....OOHhhHOO...."
+             "...OHOHHHHOHO..."
+             "...OHAAAAAAHHO.."
+             "...OHHHHHHHHO..."
+             "...HHHHSSHsHH..."
+             "...OHSSSSSsHO..."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id ginger-beard :skin "#e7b48f" :hair "#a65433" :shirt "#537d68"
+    :pixels [".....OOOOOO....."
+             "....OHHhhHHO...."
+             "...OHHhhhhHHO..."
+             "...OHHHHHHHHHO.."
+             "...OHHHHHHHHO..."
+             "...OHHHSSHsHO..."
+             "...OHSSSSSssO..."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OHSSSSSSHO..."
+             "...OHhHssHhHO..."
+             "...OOHhHHhHOO..."
+             ".....OHHHHO....."
+             "......OOOO......"
+             "......SSSS......"])
+   (:id rose-crop :skin "#bd805f" :hair "#b76c83" :shirt "#586f9b"
+    :pixels [".....OOOOOO....."
+             "....OHHhhHHO...."
+             "...HHhhhhhHHO..."
+             "...HhhhHHHHHHO.."
+             "...HHhHHHHHHO..."
+             "...HHHHSSHssO..."
+             "...OHSSSSSssO..."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id cream-wrap :skin "#995f47" :hair "#4b3940" :shirt "#d1ac76"
+    :pixels [".....OOOOOO....."
+             "....OAAAAAAO...."
+             "...OAWAAAAAAO..."
+             "..OAAAWAAAAAAO.."
+             "..OAAAAWAAAAAO.."
+             "..OAAAAAWAAAAO.."
+             "..OAAASSSSAAAO.."
+             "..OASSSSSSssAO.."
+             "..OASESSSSEsAO.."
+             "..OASESSSSEsAO.."
+             "..OACSSSSSsCAO.."
+             "..OASSSssSssAO.."
+             "..OASssssssSAO.."
+             "...AAAOOOOAAA..."
+             "....AAAAAAAA...."
+             "...OAAAAAAAAO..."])
+   (:id headset :skin "#dca581" :hair "#463e54" :shirt "#608da0"
+    :pixels [".....OOOOOO....."
+             "....AAAAAAAA...."
+             "...AHHhhhhHHA..."
+             "..AOHHHHHHHHHA.."
+             "..AOHHHHHHHHOA.."
+             "..AOHHHSSHsHOA.."
+             "..AOHSSSSSssOA.."
+             ".OAASSSSSSssSAAO"
+             ".OAASESSSSEsSAAO"
+             ".OAASESSSSEsSAAO"
+             ".OAACSSSSSsCOAAO"
+             "...OSSSssSssAA.."
+             "...OSsssssAAA..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id green-beanie :skin "#e8bb99" :hair "#5f493b" :shirt "#6b8864"
+    :pixels ["......OOOO......"
+             ".....OAAAAO....."
+             "....OAAAAAAO...."
+             "...OAaAaAaAAO..."
+             "...OAaAaAaAAO..."
+             "..OAAAAAAAAAAO.."
+             "..OAAWAAAAAAAO.."
+             "..OOOOOOOOOOOO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   (:id white-spikes :skin "#c68c67" :hair "#c1c7d3" :shirt "#8a697f"
+    :pixels ["....O..O.O......"
+             "...OHOOHOHOO...."
+             "..OHhHHhHhHHO..."
+             "...OHhhhHHHhHO.."
+             "..OHHHHHHHHHO..."
+             "...OHHSHHSHHO..."
+             "...OHSSSSSssO..."
+             "..OSSSSSSSssSO.."
+             "..OSSESSSSEsSO.."
+             "..OSSESSSSEsSO.."
+             "...OCSSSSSsCO..."
+             "...OSSSssSssO..."
+             "...OSssssssSO..."
+             ".....OOOOOO....."
+             "......ssss......"
+             "......SSSS......"])
+   ]
+  "Sixteen hand-drawn 16 by 16 pixel portraits.
+Dots are transparent; O outlines, H/h hair, S/s skin, E eyes, W glints,
+A/a accessories and C cheeks.  Colours belong to the sprite, not its provider.")
+
 (defun lispm-office-render-clear-cache ()
   "Forget cached avatar images after a character or palette change."
   (clrhash lispm-office-render--avatars))
@@ -290,8 +575,9 @@ Coordinates are relative to the displayed image's top left."
             svg)))
       (error nil))))
 
-(defun lispm-office-render--avatar (svg avatar x y)
+(defun lispm-office-render--avatar (svg avatar x y &optional size)
   "Draw local AVATAR at X/Y, returning non-nil on success.
+SIZE defaults to 18 pixels.
 The first draw caches local image data; animation frames never read the
 file again.  Remote paths are ignored without opening a connection."
   (when (stringp avatar)
@@ -302,69 +588,165 @@ file again.  Remote paths are ignored without opening a connection."
         (setq cached (lispm-office-render--read-avatar avatar))
         (puthash avatar cached lispm-office-render--avatars))
       (when cached
-        (lispm-ui-svg-embed svg cached x y 18 18)
+        (lispm-ui-svg-embed svg cached x y (or size 18) (or size 18))
         t))))
+
+(defun lispm-office-render--portrait-index (node)
+  "Return NODE's random portrait index, retaining its stable identity.
+A shuffled deck gives the first sixteen new identities different portraits.
+Redrawing, renaming, filtering and clearing image caches never reshuffle an
+existing identity.  The assignments last for the current Emacs session."
+  (let* ((key (plist-get node :key))
+         (known (gethash key lispm-office-render--portrait-assignments)))
+    (or known
+        (progn
+          (unless lispm-office-render--portrait-pool
+            (let* ((count (length lispm-office-render--portraits))
+                   (deck (vconcat (number-sequence 0 (1- count)))))
+              (cl-loop for i downfrom (1- count) above 0 do
+                       (let* ((j (random (1+ i))) (value (aref deck i)))
+                         (aset deck i (aref deck j))
+                         (aset deck j value)))
+              (setq lispm-office-render--portrait-pool (append deck nil))))
+          (let ((index (pop lispm-office-render--portrait-pool)))
+            (puthash (copy-tree key) index lispm-office-render--portrait-assignments)
+            index)))))
+
+(defun lispm-office-render--pixel-portrait (svg portrait x y &optional pixel-size)
+  "Draw PORTRAIT on SVG at X/Y in a crisp pixel grid.
+PIXEL-SIZE defaults to two world units.  Adjacent same-colour pixels share
+one rectangle; there are no interpolated curves or antialiased outlines."
+  (let* ((group (lispm-office-render--group svg "office-pixel-portrait"))
+         (size (or pixel-size 2))
+         (skin (plist-get portrait :skin))
+         (hair (plist-get portrait :hair))
+         (shirt (plist-get portrait :shirt))
+         (colors (list (cons ?O "#302b3b") (cons ?E "#302b3b")
+                       (cons ?H hair) (cons ?h (lispm-ui-blend hair "#fff0cf" 0.23))
+                       (cons ?S skin) (cons ?s (lispm-ui-blend skin "#703c42" 0.23))
+                       (cons ?C (lispm-ui-blend skin "#c56c66" 0.32))
+                       (cons ?W "#fff0d6") (cons ?A shirt)
+                       (cons ?a (lispm-ui-blend shirt "#fff0cf" 0.2)))))
+    (dom-set-attribute group 'data-portrait (symbol-name (plist-get portrait :id)))
+    (dom-set-attribute group 'shape-rendering "crispEdges")
+    (cl-loop for row across (plist-get portrait :pixels) for py from 0 do
+             (let ((px 0))
+               (while (< px (length row))
+                 (let* ((pixel (aref row px)) (end (1+ px))
+                        (color (cdr (assq pixel colors))))
+                   (while (and (< end (length row)) (= pixel (aref row end)))
+                     (setq end (1+ end)))
+                   (when color
+                     (svg-rectangle group (+ x (* px size)) (+ y (* py size))
+                                    (* (- end px) size) size :fill color))
+                   (setq px end)))))
+    group))
+
+(defun lispm-office-render--worker (svg node level phase)
+  "Draw NODE's pixel workstation on SVG at LEVEL and PHASE."
+  (let* ((working (eq (lispm-office-render--state node) 'working))
+         (portrait (aref lispm-office-render--portraits
+                         (lispm-office-render--portrait-index node)))
+         (skin (plist-get portrait :skin))
+         (shirt (plist-get portrait :shirt))
+         (shirt-light (lispm-ui-blend shirt "#fff0cf" 0.22))
+         (shirt-dark (lispm-ui-blend shirt "#302b3b" 0.3))
+         (ink (lispm-office-render--color :text))
+         (paper (lispm-office-render--color :content))
+         (edge (lispm-ui-blend paper ink 0.38))
+         (screen "#303947")
+         (hand-step (if (and working (= (% phase 2) 1)) 2 0)))
+    (dom-set-attribute svg 'shape-rendering "crispEdges")
+    ;; Every part uses the same two-unit grid: chair, shirt, face and hands.
+    (svg-rectangle svg 16 64 58 2 :fill ink :opacity 0.1)
+    (svg-rectangle svg 32 28 26 28 :fill edge)
+    (svg-rectangle svg 30 32 30 20 :fill edge)
+    (svg-rectangle svg 32 30 26 22 :fill (lispm-office-render--color :chrome))
+    (svg-rectangle svg 32 34 26 20 :fill shirt-dark)
+    (svg-rectangle svg 30 36 30 14 :fill shirt)
+    (svg-rectangle svg 26 38 8 10 :fill shirt)
+    (svg-rectangle svg 56 38 8 10 :fill shirt)
+    (svg-rectangle svg 26 38 6 2 :fill shirt-light)
+    (svg-rectangle svg 58 38 6 2 :fill shirt-light)
+    (svg-rectangle svg 34 34 22 4 :fill shirt-light)
+    (svg-rectangle svg 40 32 10 4 :fill skin)
+    (unless (and (eq level 'desk)
+                 (lispm-office-render--avatar svg (plist-get node :avatar) 30 4 30))
+      (lispm-office-render--pixel-portrait svg portrait 29 2))
+    ;; A stepped desk with a two-pixel bevel keeps the host UI's palette.
+    (svg-rectangle svg 10 54 70 8 :fill edge)
+    (svg-rectangle svg 12 54 66 4 :fill (lispm-office-render--color :chrome))
+    (svg-rectangle svg 12 54 66 2 :fill (lispm-office-render--color :light))
+    (svg-rectangle svg 14 62 4 4 :fill edge)
+    (svg-rectangle svg 72 62 4 4 :fill edge)
+    (svg-rectangle svg 24 (+ 48 hand-step) 8 4 :fill skin)
+    (svg-rectangle svg 58 (- 50 hand-step) 8 4 :fill skin)
+    ;; Laptop, typing strokes and cup are pixels too, not smooth vector art.
+    (svg-rectangle svg 28 38 34 22 :fill "#302b3b")
+    (svg-rectangle svg 30 40 30 16 :fill screen)
+    (svg-rectangle svg 30 40 30 2 :fill "#465264")
+    (svg-rectangle svg 32 44 2 2 :fill (if working "#c5e2bf" "#8995a6"))
+    (svg-rectangle svg 34 46 2 2 :fill (if working "#c5e2bf" "#8995a6"))
+    (svg-rectangle svg 32 48 2 2 :fill (if working "#c5e2bf" "#8995a6"))
+    (if working
+        (progn
+          (svg-rectangle svg 40 46 (+ 8 (* 4 (% phase 2))) 2 :fill "#c5e2bf")
+          (svg-rectangle svg 40 50 6 2 :fill "#91b6c5")
+          (svg-rectangle svg 48 50 6 2 :fill "#7e8fa9"))
+      (svg-rectangle svg 40 48 4 2 :fill "#8995a6"))
+    (svg-rectangle svg 26 58 38 4 :fill edge)
+    (svg-rectangle svg 28 58 34 2 :fill (lispm-office-render--color :chrome))
+    (svg-rectangle svg 40 58 10 2 :fill (lispm-office-render--color :light))
+    (svg-rectangle svg 14 46 6 8 :fill edge)
+    (svg-rectangle svg 16 48 4 4 :fill paper)
+    (svg-rectangle svg 20 48 2 4 :fill edge)))
+
+(defun lispm-office-render--desk-label (node)
+  "Return a compact name for NODE, preserving native session suffixes."
+  (let ((name (or (plist-get node :name) "Agent")))
+    (if (string-match "\\`\\([^@]+\\)@.*\\(<[0-9]+>\\)\\'" name)
+        (let ((role (match-string 1 name)) (suffix (match-string 2 name)))
+          (concat (truncate-string-to-width role (max 1 (- 13 (string-width suffix))) nil nil "…")
+                  " " suffix))
+      name)))
 
 (defun lispm-office-render--desk (svg node selected level phase scale)
   "Draw NODE's desk on SVG, using SELECTED, LEVEL, PHASE and SCALE."
   (let* ((group (lispm-office-render--group svg "office-desk"))
          (x (plist-get node :x)) (y (plist-get node :y))
          (width (plist-get node :width)) (height (plist-get node :height))
-         (working (eq (lispm-office-render--state node) 'working))
-         (blocked (eq (lispm-office-render--state node) 'blocked))
          (ink (lispm-office-render--color :text))
          (dim (lispm-office-render--color :dim))
+         (paper (lispm-office-render--color :content))
          (accent (lispm-office-render--state-color node))
          (queued (plist-get (plist-get node :mailbox) :queued))
          (badge (lispm-office-render--badge node)))
     (dom-set-attribute group 'data-state (symbol-name (lispm-office-render--state node)))
     (when (equal selected (plist-get node :key))
-      (svg-rectangle group x y width height :fill "none"
-                     :stroke (lispm-office-render--color :focus)
-                     :stroke-width 2 :stroke-dasharray "3 2"))
-    ;; Monitor, desk, keyboard and chair remain pixel aligned.
-    (lispm-ui-svg-fill group (+ x 10) (+ y 33) 63 9 (lispm-office-render--color :chrome))
-    (lispm-ui-svg-fill group (+ x 12) (+ y 42) 5 8 (lispm-office-render--color :shade))
-    (lispm-ui-svg-fill group (+ x 66) (+ y 42) 5 8 (lispm-office-render--color :shade))
-    (lispm-ui-svg-fill group (+ x 22) (+ y 13) 35 24 (lispm-office-render--color :frame))
-    (lispm-ui-svg-fill group (+ x 25) (+ y 16) 29 17
-                       (if working (lispm-office-render--color :accent)
-                         (lispm-office-render--color :content)))
-    (when working
-      (dotimes (line 3)
-        (lispm-ui-svg-fill group (+ x 28) (+ y 20 (* line 4))
-                           (+ 8 (* 4 (% (+ phase line) 3))) 1
-                           (lispm-office-render--color :highlight-text))))
-    (lispm-ui-svg-fill group (+ x 32) (+ y 37) 23 3 (lispm-office-render--color :dim))
-    (lispm-ui-svg-fill group (+ x 32) (+ y 57) 22 7 (lispm-office-render--color :shade))
-    ;; A character is a little worker, with their own avatar as the face.
-    (lispm-ui-svg-fill group (+ x 37) (+ y 43) 13 13 accent)
-    (unless (and (eq level 'desk)
-                 (lispm-office-render--avatar group (plist-get node :avatar) (+ x 35) (+ y 26)))
-      (lispm-ui-svg-fill group (+ x 37) (+ y 28) 13 13 (lispm-office-render--color :light))
-      (lispm-ui-svg-fill group (+ x 37) (+ y 27) 13 4 dim)
-      (lispm-ui-svg-fill group (+ x 39) (+ y 34) 2 2 ink)
-      (lispm-ui-svg-fill group (+ x 46) (+ y 34) 2 2 ink))
-    (lispm-ui-svg-fill group (+ x 32) (+ y (if (and working (= (% phase 2) 1)) 42 46))
-                       6 4 accent)
-    (lispm-ui-svg-fill group (+ x 50) (+ y (if blocked 31 46)) 5 (if blocked 17 4) accent)
+      (svg-rectangle group x y width height
+                     :fill (lispm-ui-blend paper (lispm-office-render--color :focus) 0.05)
+                     :stroke (lispm-office-render--color :focus) :stroke-width 1.2))
+    (let ((worker (lispm-office-render--group group "office-worker")))
+      (dom-set-attribute worker 'transform (format "translate(%s %s)" x y))
+      (lispm-office-render--worker worker node level phase))
     (when (and (numberp queued) (> queued 0))
-      (lispm-ui-svg-fill group (+ x 64) (+ y 25) 15 8 (lispm-office-render--color :light))
-      (lispm-ui-svg-outline group (+ x 64) (+ y 25) 15 8 dim)
-      (lispm-office-render--text group (format "%s" queued) (+ x 71) (+ y 22) 9 ink "middle" 4))
+      (svg-rectangle group (+ x 69) (+ y 34) 17 12
+                     :fill paper :stroke dim :stroke-width 0.8)
+      (lispm-office-render--text group (format "%s" queued) (+ x 77.5) (+ y 43) 8 ink "middle" 3))
     (when (and badge (or (eq level 'desk) (memq (lispm-office-render--state node) '(blocked error))))
-      (let* ((font (if (eq level 'floor) (/ 9 scale) 11))
-             (bw (max 18 (+ 8 (* (length badge) font 0.6)))))
-        (lispm-ui-svg-fill group (+ x 53) (+ y 3) bw (+ font 5)
-                           (lispm-office-render--color :content))
-        (lispm-office-render--text group badge (+ x 57) (+ y 5 font) font accent)))
+      (let* ((font (if (eq level 'floor) (/ 9 scale) 9))
+             (bw (max 16 (+ 8 (* (length badge) font 0.6)))))
+        (svg-rectangle group (+ x width (- bw) -3) (+ y 2) bw (+ font 5)
+                       :fill paper :stroke accent :stroke-width 0.8)
+        (lispm-office-render--text group badge (+ x width (/ (- bw) 2) -3) (+ y 4 font)
+                                   font accent "middle")))
     (when (eq level 'desk)
-      (lispm-office-render--text group (plist-get node :name) (+ x (/ width 2)) (+ y height -4)
-                                 10 ink "middle" 14)
+      (lispm-office-render--text group (lispm-office-render--desk-label node)
+                                 (+ x (/ width 2)) (+ y height -4) 10 ink "middle" 14)
       (lispm-office-render--text group
                                  (if (plist-get node :app-character) "APP"
                                    (upcase (format "%s" (or (plist-get node :kind) "?"))))
-                                 (+ x 4) (+ y 10) 7 dim nil 5))))
+                                 (+ x 4) (+ y 9) 6.5 dim nil 6))))
 
 (defun lispm-office-render--endpoint (endpoint nodes)
   "Find ENDPOINT by stable key or unambiguous name in NODES."
@@ -421,7 +803,8 @@ file again.  Remote paths are ignored without opening a connection."
 Focus on ROOM-ID when supplied.  EVENTS are actual roster message events;
 an optional :progress from 0 to 1 locates each envelope along its path.
 Desk, floor and map views use thresholds 0.72 and 0.45.  The current
-LispM UI palette supplies every colour."
+LispM UI palette supplies interface colours; pixel portraits retain their
+colours."
   (let* ((projection (lispm-office-render-projection plan scale room-id))
          (actual (plist-get projection :scale))
          (level (lispm-office-render--level actual))
