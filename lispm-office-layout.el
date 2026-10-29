@@ -239,9 +239,9 @@ anchors are (X . Y) world coordinates; walk anchors locate feet."
               (plist-get node :walk-anchor) walk
               (plist-get node :idle-anchor)
               (cons (+ (plist-get coffee :x) 12
-                       (* (% (or (plist-get node :slot) 0) 4) 16))
+                       (* (or (plist-get node :display-seat) (% (or (plist-get node :slot) 0) 4)) 16))
                     (+ (plist-get coffee :y) (plist-get coffee :height) -4)))
-        (push node (gethash (/ (or (plist-get node :slot) 0) 4) groups))
+        (push node (gethash (or (plist-get node :display-pod) (/ (or (plist-get node :slot) 0) 4)) groups))
         (let ((line (seq-find (lambda (aisle) (= (plist-get aisle :y) (- (cdr walk) 4))) aisles)))
           (if line
               (setf (plist-get line :width) (max (plist-get line :width) (- (car walk) spine)))
@@ -273,7 +273,9 @@ anchors are (X . Y) world coordinates; walk anchors locate feet."
   "Pack a copy of ROOM into WIDTH by HEIGHT pixels without stretching desks.
 Return (:room ROOM :scale SCALE).  Compact desk pods share circulation
 lanes and a coffee area beside or below them.  The floor fills the pane;
-short panes scroll at the minimum readable scale of 0.72."
+short panes scroll at the minimum readable scale of 0.72.  Visible
+agents form chunks of four in saved slot order, without retaining empty
+historical reservations in the display.  Saved slots are never changed."
   (dolist (dimension (list width height))
     (unless (and (numberp dimension) (> dimension 0) (< dimension 1.0e6))
       (signal 'wrong-type-argument (list 'positive-finite-number dimension))))
@@ -285,10 +287,14 @@ short panes scroll at the minimum readable scale of 0.72."
          (dh (apply #'max 80 (mapcar (lambda (node) (plist-get node :height)) nodes)))
          (pixels-wide (max (float width) (* 0.72 (+ dw 64))))
          (best nil) (score -1.0))
-    (dolist (node nodes)
-      (let* ((pod (/ (or (plist-get node :slot) 0) 4)) (group (assq pod groups)))
-        (if group (setcdr group (append (cdr group) (list node)))
-          (setq groups (append groups (list (list pod node)))))))
+    (cl-loop for node in nodes for index from 0 do
+             (dolist (property '(:display-pod :display-seat))
+               (unless (plist-member node property) (nconc node (list property nil))))
+             (setf (plist-get node :display-pod) (/ index 4)
+                   (plist-get node :display-seat) (% index 4))
+             (let* ((pod (/ index 4)) (group (assq pod groups)))
+               (if group (setcdr group (append (cdr group) (list node)))
+                 (setq groups (append groups (list (list pod node)))))))
     (unless groups (setq groups '((0))))
     (setq largest (apply #'max 1 (mapcar (lambda (group) (length (cdr group))) groups)))
     ;; Enumerate only compact furniture arrangements.  Spare floor enlarges
