@@ -58,23 +58,28 @@ back to its project or another agent.
 While a conversation's Work view remains visible, selecting another Agent in a
 second window follows that session by default and returns to Session scope.
 Switching between chat and transcript views of the same stable identity preserves the chosen scope and desk.
-An existing Inspector follows the selection without changing its Work, Mailbox or
+An open details page follows the selection without changing its Work, Mailbox or
 Character tab or stealing focus. Manual desk selections survive updates while
 they remain in scope; when a request settles and the selected collaborator leaves
-scope, selection and Inspector return to the source. Set
+scope, selection and details return to the source. Set
 `lispm-office-follow-current-agent` to `nil` to disable following.
 
-The optional Inspector opens in a side window owned by Work. Open Chat prefers
+Clicking a desk replaces the floor with details in the same Work buffer and
+window. It retains Office mode, stores the floor's point and scroll position,
+and pauses floor animation. Back restores that view; leaving Work clears the
+details state. A centered portrait, name and status head the page, followed by
+contextual actions and native Work, Mailbox and Character tabs. Empty sections
+are omitted. Open Chat prefers
 an existing native chat view; terminal agents open their canonical buffer.
 Navigation uses LispM Agent's host display functions and never resumes a retired
 conversation. Entry from outside a conversation uses
 `lispm-agents-main-window-function` to locate the host's main window.
 
-Leaving Work closes its Inspector and releases its subscriptions. Disabling or
+Leaving Work clears its details and releases its subscriptions. Disabling or
 unloading the plugin restores source conversations, headers and local bindings,
-and releases its roster observers. Inspector panes carry ownership markers;
-closing them removes the pane without restoring an obsolete buffer from window
-history. Workspace cleanup removes saved panes belonging to closed Inspectors
+and releases its roster observers. Legacy Inspector panes carry ownership markers;
+cleanup removes them without restoring an obsolete buffer from window history.
+Workspace cleanup removes saved panes belonging to closed legacy Inspectors
 and restores the original source of a closed Work view. Return contexts stay in
 this Emacs session's window configurations, without being serialized to disk.
 Source conversations keep running.
@@ -122,8 +127,9 @@ Source changes, roster refreshes and settled requests recompute that scope
 without fetching work details. Cached message animations are discarded when
 either endpoint leaves the visible group.
 
-Only an opened, visible Inspector calls `lispm-agents-roster-details`, for its
-selected key. Hidden inspectors defer reads. Work shows pending and recent calls
+Only an opened, visible details page calls `lispm-agents-roster-details`, for its
+selected key. Hidden pages defer reads; resizing redraws a cached model without
+fetching details or replacing its permission-turn snapshot. Work shows pending and recent calls
 and files touched this turn; Mailbox shows handling and queued entries with sender,
 reply-to and time, plus wait relations. Character reads the selected character’s
 identity, soul, model and recent diary entries on demand.
@@ -150,8 +156,11 @@ its room. Text mode uses the same records, stable identity and commands.
 Eight room interiors combine wood, parquet, tile, tatami or carpet patterns with
 wallpaper, dividing walls, doors and furnishings. A shuffled deck assigns each
 room a style retained for the Emacs session, independently of the interface's
-accent color. Rooms include coffee counters, plants and shelves where their
-layout provides space. Room labels are centered signs within the wallpaper.
+accent color. Raised back walls have cornices, wainscot, skirting and floor-contact
+shadows. Windows, clocks, framed art, noticeboards and shelves sit on the wall;
+floor patterns and furniture begin below it. Rooms include coffee counters and
+plants where their layout provides space. Room labels are centered signs within
+the wallpaper.
 
 Workers use 16 distinct 16 × 16 pixel sprites with varied hairstyles,
 accessories, skin, hair and clothing colors. Each newly seen stable session key

@@ -3,7 +3,7 @@ LISPM_KIT ?= ../lispm-kit
 LISPM_UI ?= ../lispm-ui
 LISPM_AGENT ?= ../lisp_machine/lisp
 LOAD_PATH = -L . -L $(LISPM_KIT) -L $(LISPM_UI) -L $(LISPM_AGENT)
-FILES = lispm-office-layout.el lispm-office-render.el lispm-office-inspect.el lispm-office-demo.el lispm-office.el lispm-office-plugin.el
+FILES = lispm-office-layout.el lispm-office-render.el lispm-office-details.el lispm-office-inspect.el lispm-office-demo.el lispm-office.el lispm-office-plugin.el
 
 .PHONY: test compile
 test:

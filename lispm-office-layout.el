@@ -17,6 +17,10 @@
 
 (defconst lispm-office-layout--room-width 450)
 (defconst lispm-office-layout--room-height 454)
+(defconst lispm-office-layout-wall-height 88
+  "World-coordinate height reserved for the room's back wall.")
+(defconst lispm-office-layout-wall-thickness 12
+  "World-coordinate thickness of the side and front walls.")
 (defconst lispm-office-layout--file-limit (* 4 1024 1024)
   "Maximum number of bytes read from a saved seating file.")
 
@@ -220,12 +224,14 @@ SERVICE, when supplied, is a bounded coffee-area rectangle.  All
 anchors are (X . Y) world coordinates; walk anchors locate feet."
   (let* ((x (plist-get room :x)) (y (plist-get room :y))
          (width (plist-get room :width)) (height (plist-get room :height))
+         (floor-y (+ y lispm-office-layout-wall-height))
+         (floor-bottom (- (+ y height) lispm-office-layout-wall-thickness))
          (nodes (plist-get room :nodes))
-         (spine (if nodes (max (+ x 12) (- (apply #'min (mapcar (lambda (node) (plist-get node :x)) nodes)) 20))
+         (spine (if nodes (max (+ x lispm-office-layout-wall-thickness 6) (- (apply #'min (mapcar (lambda (node) (plist-get node :x)) nodes)) 20))
                   (+ x 20)))
          (groups (make-hash-table :test #'eql))
          (walk-gap (if (plist-get room :responsive) 12 4))
-         (coffee (or service (list :kind 'coffee :x (+ x width -112) :y (+ y 40)
+         (coffee (or service (list :kind 'coffee :x (+ x width -112) :y (+ floor-y 4)
                                    :width 88 :height 18)))
          (aisles nil) (pods nil))
     (dolist (node nodes)
@@ -245,7 +251,8 @@ anchors are (X . Y) world coordinates; walk anchors locate feet."
         (let ((line (seq-find (lambda (aisle) (= (plist-get aisle :y) (- (cdr walk) 4))) aisles)))
           (if line
               (setf (plist-get line :width) (max (plist-get line :width) (- (car walk) spine)))
-            (push (list :x spine :y (- (cdr walk) 4) :width (- (car walk) spine) :height 8) aisles)))))
+            (push (list :x spine :y (- (cdr walk) 4) :width (- (car walk) spine)
+                        :height (max 1 (min 8 (- floor-bottom (- (cdr walk) 4))))) aisles)))))
     (maphash
      (lambda (id members)
        (let ((left (apply #'min (mapcar (lambda (node) (plist-get node :x)) members)))
@@ -257,13 +264,15 @@ anchors are (X . Y) world coordinates; walk anchors locate feet."
      groups)
     (setf (plist-get room :pods) (sort pods (lambda (a b) (< (plist-get a :id) (plist-get b :id))))
           (plist-get room :circulation-x) spine
-          (plist-get room :door-anchor) (cons (+ x 8) (+ y height -20))
+          (plist-get room :door-anchor) (cons (+ x lispm-office-layout-wall-thickness) (+ y height -20))
           (plist-get room :aisles)
-          (cons (list :x (- spine 6) :y (+ y 40) :width 12 :height (max 1 (- height 52))) aisles)
+          (cons (list :x (- spine 6) :y (+ floor-y 4) :width 12
+                      :height (max 1 (- floor-bottom floor-y 4))) aisles)
           (plist-get room :fixtures) (list coffee))
-    (dolist (plant (list (list :kind 'plant :x (+ x width -42) :y (+ y 38) :width 18 :height 16)
+    (dolist (plant (list (list :kind 'plant :x (+ x width -42) :y (+ floor-y 4) :width 18 :height 16)
                         (list :kind 'plant :x (+ x width -42) :y (+ y height -46) :width 18 :height 22)))
-      (when (and (>= (plist-get plant :x) (+ x 12)) (>= (plist-get plant :y) (+ y 38))
+      (when (and (>= (plist-get plant :x) (+ x lispm-office-layout-wall-thickness))
+                 (>= (plist-get plant :y) floor-y)
                  (not (seq-some (lambda (obstacle) (lispm-office-layout--overlap-p plant obstacle))
                                 (append nodes (plist-get room :fixtures) (plist-get room :aisles)))))
         (setf (plist-get room :fixtures) (append (plist-get room :fixtures) (list plant)))))
@@ -299,7 +308,9 @@ historical reservations in the display.  Saved slots are never changed."
     (setq largest (apply #'max 1 (mapcar (lambda (group) (length (cdr group))) groups)))
     ;; Enumerate only compact furniture arrangements.  Spare floor enlarges
     ;; the circulation/decor area, never the distance between paired desks.
-    (dotimes (seats largest)
+    ;; A single pod may flatten in a short pane.  Multiple pods keep paired
+    ;; desks so wide rows cannot consume every safe collaboration standing spot.
+    (dotimes (seats (if (= (length groups) 1) largest (min largest 2)))
       (dotimes (columns (length groups))
         (dolist (service '(right bottom))
           (let* ((seat-cols (1+ seats)) (pod-cols (1+ columns))
@@ -309,7 +320,7 @@ historical reservations in the display.  Saved slots are never changed."
                  (workw (+ (* pod-cols pw) (* (1- pod-cols) 40)))
                  (workh (+ (* pod-rows ph) (* (1- pod-rows) 40)))
                  (minw (+ 64 workw (if (eq service 'right) 124 0)))
-                 (minh (+ 88 workh (if (eq service 'bottom) 92 0)))
+                 (minh (+ lispm-office-layout-wall-height 56 workh (if (eq service 'bottom) 92 0)))
                  (fit (min (/ pixels-wide minw) (/ (float height) minh)))
                  ;; At equal scale prefer paired desks and a side service area.
                  (quality (+ (min 1.5 fit) (if (= seat-cols 2) 0.006 0)
@@ -322,10 +333,13 @@ historical reservations in the display.  Saved slots are never changed."
                  (worldh (max minh (/ (float height) scale)))
                  (x (plist-get room :x)) (y (plist-get room :y))
                  (left (+ x 40 (/ (- worldw 64 workw (if (eq service 'right) 124 0)) 2)))
-                 (top (+ y 56 (/ (- worldh 88 workh (if (eq service 'bottom) 92 0)) 2)))
+                 (top (+ y lispm-office-layout-wall-height 24
+                         (/ (- worldh lispm-office-layout-wall-height 56 workh
+                               (if (eq service 'bottom) 92 0)) 2)))
                  (coffee (if (eq service 'right)
-                             (list :kind 'coffee :x (+ x worldw -124) :y (+ y 56)
-                                   :width 100 :height (min 100 (- worldh 88)))
+                             (list :kind 'coffee :x (+ x worldw -124)
+                                   :y (+ y lispm-office-layout-wall-height 24)
+                                   :width 100 :height (min 100 (- worldh lispm-office-layout-wall-height 56)))
                            (list :kind 'coffee :x (+ x 40) :y (+ y worldh -100)
                                  :width (min 120 (- worldw 64)) :height 68))))
       (cl-loop for group in groups for index from 0 do
@@ -346,10 +360,10 @@ the room border clear.  A tightly packed room may have no such point."
          (right (+ px (plist-get peer :width)))
          (bottom (+ py (plist-get peer :height)))
          (walk (plist-get peer :walk-anchor))
-         (left-edge (+ (plist-get room :x) 8))
-         (top-edge (+ (plist-get room :y) 38))
-         (right-edge (+ (plist-get room :x) (plist-get room :width) -8))
-         (bottom-edge (+ (plist-get room :y) (plist-get room :height) -8))
+         (left-edge (+ (plist-get room :x) lispm-office-layout-wall-thickness))
+         (top-edge (+ (plist-get room :y) lispm-office-layout-wall-height))
+         (right-edge (- (+ (plist-get room :x) (plist-get room :width)) lispm-office-layout-wall-thickness))
+         (bottom-edge (- (+ (plist-get room :y) (plist-get room :height)) lispm-office-layout-wall-thickness))
          (xs (list (- px 41) (+ right 22))) points)
     (dolist (node nodes)
       (push (- (plist-get node :x) 41) xs)
@@ -436,7 +450,8 @@ remain in STATE.  Input data is never mutated."
           (setq node (plist-put node :room (plist-get room :id)))
           (setq node (plist-put node :slot slot))
           (setq node (plist-put node :x (+ (plist-get room :x) 24 (* (% pod 2) 204) (* (% local 2) 94))))
-          (setq node (plist-put node :y (+ (plist-get room :y) 62 (* (/ pod 2) 186) (* (/ local 2) 88))))
+          (setq node (plist-put node :y (+ (plist-get room :y) lispm-office-layout-wall-height 24
+                                           (* (/ pod 2) 164) (* (/ local 2) 82))))
           (setq node (plist-put node :width 90))
           (setq node (plist-put node :height 80))
           (push node nodes)

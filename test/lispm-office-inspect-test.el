@@ -195,7 +195,7 @@
                 (when controls (should (< width 35))))
               (forward-line))))))))
 
-(ert-deftest lispm-office-inspect-quit-restores-floor-keyboard-focus-after-resize ()
+(ert-deftest lispm-office-inspect-inline-back-restores-floor-keyboard-focus ()
   (skip-unless (image-type-available-p 'svg))
   (lispm-office-inspect-test--with-work-office
     (let ((lispm-ui-current-palette
@@ -211,18 +211,21 @@
           (setq lispm-office--demo t)
           (lispm-office--ingest
            (list (list :key key :name "Ada" :root temporary-file-directory :alive t
-                       :status '(:state idle) :mailbox '(:queued 0)))))
+                       :status '(:state idle) :mailbox '(:queued 0))))
+          (lispm-office--focus-selection))
         (let* ((inspector (lispm-office-inspect key 'work owner))
                (pane (get-buffer-window inspector)))
-          (window-resize pane -5 t)
+          (should (eq inspector owner))
+          (should (eq pane office-window))
           (with-current-buffer owner
             (goto-char (point-min))
             (set-window-point office-window (point-min)))
           (with-current-buffer inspector (call-interactively (key-binding (kbd "q"))))
-          (should-not (buffer-live-p inspector))
+          (should (buffer-live-p owner))
+          (should-not (buffer-local-value 'lispm-office-inspect--inline owner))
           (should (eq (selected-window) office-window))
           (with-current-buffer owner
-            ;; The resize redraw after closing the pane keeps the floor focus.
+            ;; Returning from details keeps keyboard focus on the floor.
             (lispm-office--draw)
             (should (= (point) lispm-office--floor-start))
             (should (eq (key-binding (kbd "RET")) #'lispm-office-inspect-selected))

@@ -1,7 +1,7 @@
 #+title: LispM Office
 
 A LispM Agent plugin that adds a Work view to your current conversation and its
-explicit collaborators. Each conversation has a desk, and an inspector shows its
+explicit collaborators. Each conversation has a desk, and an in-page view shows its
 current work and mailbox. LispM UI draws the controls and view
 in graphical Emacs and on a text terminal.
 
@@ -14,7 +14,7 @@ restores the source buffer, draft, point and scroll position; the agent keeps
 running throughout. =q= in Work also returns to the conversation.
 
 In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
-=C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its Inspector;
+=C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its details;
 Open Chat returns to that same listener. In a text terminal, Work uses a text
 agent list with keyboard navigation, inspection and conversation switching.
 The pixel room and sprite animation require graphical Emacs; terminal graphics
@@ -43,12 +43,16 @@ alone do not add ancestors, and linked peers do not bring unrelated children.
 Cross-project collaborators share the session's display room. Project and All projects group
 desks by project; these display choices never alter saved global seats.
 
-Click a desk or press =RET= to open its optional Inspector side window with Work,
-Mailbox and Character tabs.
-In the Inspector, =o= opens its conversation, =TAB= / =S-TAB= move between
-controls, and =q= closes it.
+Click a desk or press =RET= to show that Agent's details in the same Work buffer.
+A centered portrait, name and status sit above native Work, Mailbox and Character
+tabs. =Back to Office= or =q= restores the floor, selection and scroll position;
+it does not open a second pane. In details, =o= opens the conversation,
+=TAB= / =S-TAB= move between controls, and arrows scroll the page.
 The room fills the available buffer area by default and its desks reflow when
-the window changes size. Avatars and text keep their proportions; saved seat
+the window changes size. Raised walls, skirting and shadows separate the floor
+from the wallpaper; windows, clocks, framed art, noticeboards and shelves decorate
+the eight room styles. Furniture and walking paths stay below the wall.
+Avatars and text keep their proportions; saved seat
 identities stay unchanged. The view menu also contains room selection, text view,
 refresh and help. The floor has no status-summary rows or zoom buttons.
 
@@ -73,7 +77,7 @@ in a second window while a conversation's Work view is visible, it follows that
 agent in Session scope; switching between the same session's chat and transcript
 preserves your scope. Set =lispm-office-follow-current-agent= to =nil= to keep your desk selection.
 
-The inspector and actions use the selected scope. =n= leads to scoped agents
+The details and actions use the selected scope. =n= leads to scoped agents
 that need you. Rooms grow automatically, with a map overview
 when there are many agents. Seats survive restarts; only
 =Compact Saved Seats…= removes empty reservations.
@@ -97,11 +101,11 @@ when there are many agents. Seats survive restarts; only
 Approve All is limited to one selected agent and its current turn. A change to
 the displayed permissions cancels the preview. Terminal agents expose only the
 actions supported by their provider; open their chat for questions or approvals.
-Leaving Work releases its inspector and subscriptions. Disabling
+Leaving Work clears its details and releases its subscriptions. Disabling
 =lispm-office-plugin-mode= restores conversations and their original headers,
-and removes the plugin's local bindings and roster observers. Closing an Inspector
-removes its pane; returning to a saved workspace also clears obsolete Inspector
-panes and restores the source of a closed Work view.
+and removes the plugin's local bindings and roster observers. Returning to a saved
+workspace clears obsolete Inspector panes from older versions and restores the
+source of a closed Work view.
 
 * Installing
 

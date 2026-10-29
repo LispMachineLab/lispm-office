@@ -36,6 +36,7 @@
 (declare-function lispm-office-demo-records "lispm-office-demo" (count))
 (declare-function lispm-desktop-platinum-tabs "lispm-desktop-platinum-controls" (tabs width &optional face))
 (declare-function lispm-desktop-platinum-tabs-width "lispm-desktop-platinum-controls" (labels &optional face))
+(declare-function lispm-terminal-p "lispm-terminal" (&optional frame))
 (defvar lispm-agents-roster-change-functions)
 (defvar lispm-directory)
 (defvar lispm-office-mode-map)
@@ -155,9 +156,9 @@ A directory view has no conversation tab or inferred conversation target."
         (set-marker start nil)))))
 
 (defun lispm-office-cleanup-windows (&rest _)
-  "Restore a conversation if a saved workspace resurrected its closed Work view.
-Only a generated placeholder with the original Office return context qualifies.
-The Inspector's workspace cleanup invokes this after tab restoration."
+  "Clean up saved Work return contexts after workspace or Focus navigation.
+Restore only generated placeholders with an original return context.  When
+Focus replaced inline details with a new chat, retain that new conversation."
   (save-selected-window
     (walk-windows
      (lambda (window)
@@ -166,6 +167,14 @@ The Inspector's workspace cleanup invokes this after tab restoration."
               (buffer (window-buffer window))
               (name (or (plist-get saved :view-name)
                         (and (bufferp view) (buffer-last-name view)))))
+         (when (and saved (buffer-live-p view) (not (eq buffer view))
+                    (buffer-local-value 'lispm-office-inspect--inline view)
+                    (fboundp 'lispm-terminal-p) (lispm-terminal-p (window-frame window)))
+           ;; The native session list can replace Work without using its
+           ;; keymap.  Release obsolete return markers without replacing the
+           ;; newly displayed chat, then close an otherwise hidden detail page.
+           (lispm-office--restore-window window)
+           (unless (get-buffer-window view t) (kill-buffer view)))
          (when (and saved (bufferp view) (not (buffer-live-p view)) name
                     (with-current-buffer buffer
                       (and (eq major-mode 'special-mode)
@@ -363,7 +372,7 @@ Return non-nil when scope contents or selection changed."
                            (plist-get lispm-office--plan :rooms))))
         (setq lispm-office--room nil))))
     (when (or (not (equal old-selected lispm-office--selected))
-              (when-let* ((inspector (cdr (assq (current-buffer) lispm-office-inspect--buffers)))
+              (when-let* ((inspector (lispm-office-inspect-buffer (current-buffer)))
                           ((buffer-live-p inspector)))
                 (let ((key (buffer-local-value 'lispm-office-inspect--key inspector)))
                   (not (seq-find (lambda (record) (equal key (plist-get record :key)))
@@ -521,7 +530,16 @@ remains in scope; switching session returns to Session scope."
             caption "\n")))
 
 (defun lispm-office--draw ()
-  "Draw cached data, without inspecting or querying an agent."
+  "Draw the current page from cached data, without querying an agent."
+  (unless lispm-office--drawing
+    (if lispm-office-inspect--inline
+        (let ((lispm-office--drawing t))
+          (setq lispm-office--dirty nil)
+          (lispm-office-inspect--draw t))
+      (lispm-office--draw-floor))))
+
+(defun lispm-office--draw-floor ()
+  "Draw the cached floor, without inspecting or querying an agent."
   (unless lispm-office--drawing
     ;; Global line-number mode runs after major-mode setup.  Disable its
     ;; buffer-local gutter before measuring the edge-to-edge image.
@@ -572,7 +590,7 @@ remains in scope; switching session returns to Session scope."
 
 (defun lispm-office--animated-p ()
   "Whether visible graphical content currently needs animation."
-  (and lispm-office-animate (lispm-office--graphic-p)
+  (and (not lispm-office-inspect--inline) lispm-office-animate (lispm-office--graphic-p)
        (or (lispm-office-render-visible-events (lispm-office--scene-plan) lispm-office--scale
                                                lispm-office--room lispm-office--flights)
            (and (>= (plist-get (lispm-office-render-projection
@@ -619,10 +637,12 @@ remains in scope; switching session returns to Session scope."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (lispm-office--prune-flights)
-      (if (lispm-office--graphic-p)
-          (progn (setq lispm-office--phase (mod (1+ lispm-office--phase) 32))
-                 (lispm-office--draw))
-        (setq lispm-office--flights nil))
+      (cond
+       (lispm-office-inspect--inline nil)
+       ((lispm-office--graphic-p)
+        (setq lispm-office--phase (mod (1+ lispm-office--phase) 32))
+        (lispm-office--draw))
+       (t (setq lispm-office--flights nil)))
       (lispm-office--sync-timer))))
 
 (defun lispm-office--ingest (records &optional event)
@@ -639,7 +659,8 @@ remains in scope; switching session returns to Session scope."
       (let ((sequence (plist-get message :sequence)))
         (when (and (numberp sequence) (> sequence lispm-office--sequence))
           (setq lispm-office--sequence sequence)
-          (when (and lispm-office-animate (lispm-office--graphic-p)
+          (when (and (not lispm-office-inspect--inline)
+                     lispm-office-animate (lispm-office--graphic-p)
                      (lispm-office--event-in-scope-p message)
                      (memq (plist-get message :type) '(message-queued message-taken message-delivered)))
             (push (plist-put (copy-sequence message) :started (float-time)) lispm-office--flights)))))
@@ -677,7 +698,7 @@ remains in scope; switching session returns to Session scope."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (lispm-office-inspect-visible-refresh buffer)
-        (when (and (lispm-office--window)
+        (when (and (not lispm-office-inspect--inline) (lispm-office--window)
                    (or lispm-office--dirty
                        (not (equal lispm-office--size (lispm-office--dimensions)))))
           (lispm-office--draw))
@@ -718,16 +739,17 @@ remains in scope; switching session returns to Session scope."
 
 (defun lispm-office--focus-selection ()
   "Put keyboard focus on the scene or the selected agent's text row."
-  (let ((position lispm-office--floor-start))
-    (unless (lispm-office--graphic-p)
-      (while (and (< position (point-max))
-                  (not (equal lispm-office--selected
-                              (get-text-property position 'lispm-office-key))))
-        (setq position (next-single-property-change position 'lispm-office-key nil (point-max))))
-      (when (= position (point-max)) (setq position lispm-office--floor-start)))
-    (goto-char position)
-    (when-let* ((window (lispm-office--window)))
-      (set-window-point window position))))
+  (unless lispm-office-inspect--inline
+    (let ((position lispm-office--floor-start))
+      (unless (lispm-office--graphic-p)
+        (while (and (< position (point-max))
+                    (not (equal lispm-office--selected
+                                (get-text-property position 'lispm-office-key))))
+          (setq position (next-single-property-change position 'lispm-office-key nil (point-max))))
+        (when (= position (point-max)) (setq position lispm-office--floor-start)))
+      (goto-char position)
+      (when-let* ((window (lispm-office--window)))
+        (set-window-point window position)))))
 
 (defun lispm-office--select (key &optional inspect)
   "Select KEY, enter its room if needed, and optionally INSPECT."
@@ -746,6 +768,8 @@ remains in scope; switching session returns to Session scope."
                                   (> (plist-get projection :pixel-height) (cdr size)))))))
               (and lispm-office--room (not (equal lispm-office--room (plist-get node :room)))))
       (setq lispm-office--room (plist-get node :room) lispm-office--fit t))
+    (when lispm-office-inspect--inline
+      (lispm-office-inspect-follow (current-buffer) key))
     (lispm-office--draw)
     (lispm-office--focus-selection)
     (lispm-office--sync-timer)
@@ -1005,6 +1029,7 @@ The source buffer and its input remain intact."
       (setq source (or (plist-get (window-parameter window 'lispm-office-source) :buffer)
                        (other-buffer buffer t))))
     (with-current-buffer buffer
+      (when lispm-office-inspect--inline (lispm-office-inspect-close buffer))
       (unless (and (derived-mode-p 'lispm-office-mode) lispm-office--seat-path)
         ;; Read before initializing, so reopening after an error cannot replace
         ;; the corrupt file with an empty layout.

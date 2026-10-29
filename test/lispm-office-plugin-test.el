@@ -277,7 +277,7 @@ model requests, messages and permission actions must never run."
         (lispm-office-plugin-mode 1)
         (let* ((office (lispm-office))
                (inspector (lispm-office-inspect key 'mailbox office))
-               (conversation-window (get-buffer-window inspector))
+               (conversation-window (split-window (get-buffer-window office) nil 'right))
                (terminal-key '(claude "resolved-terminal-identity")))
           (select-window conversation-window)
           (switch-to-buffer terminal)
@@ -289,8 +289,11 @@ model requests, messages and permission actions must never run."
               (lispm-office-inspect--draw)
               (should-not lispm-office-inspect--key)
               (should (eq lispm-office-inspect--tab 'mailbox))
-              (should (string-match-p "[Ww]aiting.*session" (buffer-string)))
-              (should-not (next-button (point-min)))
+              (should (string-match-p "[Ww]aiting.*session\\|session identity" (buffer-string)))
+              (let ((back (next-button (point-min))))
+                (should back)
+                (should (string-match-p "Back" (button-get back 'lispm-ui-label)))
+                (should-not (next-button (button-end back))))
               (should-error (lispm-office-inspect-compose) :type 'user-error))
             (with-current-buffer office
               (should-not lispm-office--selected)
@@ -439,7 +442,7 @@ model requests, messages and permission actions must never run."
         (should (eq (window-buffer conversation-window) other-source))
         (should (equal (buffer-local-value 'lispm-office--selected office) key))))))
 
-(ert-deftest lispm-office-plugin-follow-retargets-hidden-inspector-without-details ()
+(ert-deftest lispm-office-plugin-hidden-inline-page-defers-context-follow ()
   (lispm-office-plugin-test--isolated
     (let ((lispm-office-follow-current-agent t))
       (switch-to-buffer chat)
@@ -454,9 +457,18 @@ model requests, messages and permission actions must never run."
           (run-hook-with-args 'window-buffer-change-functions (selected-frame)))
         (should (eq (selected-window) conversation-window))
         (should-not (get-buffer-window inspector))
-        (should (equal (buffer-local-value 'lispm-office-inspect--key inspector) other-key))
+        ;; Details share the Work buffer, so replacing its sole window hides
+        ;; the whole page.  A hidden page retains its session without reads.
+        (should (equal (buffer-local-value 'lispm-office-inspect--key inspector) key))
         (should (eq (buffer-local-value 'lispm-office-inspect--tab inspector) 'mailbox))
-        (should (buffer-local-value 'lispm-office-inspect--dirty inspector))))))
+        (should-not (buffer-local-value 'lispm-office-inspect--dirty inspector))
+        ;; Once the page is visible beside the selected conversation, the
+        ;; same public window event follows it and refreshes the active tab.
+        (let ((work-window (split-window conversation-window nil 'right)))
+          (set-window-buffer work-window office)
+          (run-hook-with-args 'window-buffer-change-functions (selected-frame))
+          (should (equal (buffer-local-value 'lispm-office-inspect--key inspector) other-key))
+          (should (eq (buffer-local-value 'lispm-office-inspect--tab inspector) 'mailbox)))))))
 
 (ert-deftest lispm-office-plugin-manual-selection-survives-same-source-updates ()
   (lispm-office-plugin-test--isolated

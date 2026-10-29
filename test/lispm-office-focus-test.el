@@ -226,5 +226,46 @@
               (should (window-live-p pane))))
         (when (buffer-live-p inspector) (kill-buffer inspector))))))
 
+(ert-deftest lispm-office-focus-native-session-list-closes-inline-details ()
+  (dolist (command '(lispm-terminal-talk lispm-terminal-peek))
+    (lispm-office-focus-test--view
+      (with-current-buffer owner
+        (setq lispm-office-inspect--inline t
+              lispm-office-inspect--owner owner
+              lispm-office-inspect--key '(lispm "focus-test"))
+        (lispm-office-inspect-inline-mode 1))
+      (push owner lispm-office--buffers)
+      (select-window side)
+      (funcall command (list :agent agent))
+      (lispm-office-cleanup-windows)
+      (should-not (buffer-live-p owner))
+      (should-not lispm-office-inspect--buffers)
+      (should-not (window-parameter listener 'lispm-office-source))
+      (should (eq (window-buffer listener) chat))
+      (should (eq (window-buffer side) sessions))
+      (should (eq (selected-window) (if (eq command 'lispm-terminal-peek) side listener)))
+      (should (equal (with-current-buffer source (buffer-string)) "Unsent source draft")))))
+
+(ert-deftest lispm-office-focus-inline-shortcut-closes-details-before-navigation ()
+  (lispm-office-focus-test--view
+    (with-current-buffer owner
+      (setq lispm-office-inspect--inline t
+            lispm-office-inspect--owner owner
+            lispm-office-inspect--key '(lispm "focus-test"))
+      (lispm-office-inspect-inline-mode 1))
+    (let ((lispm-terminal-map (copy-keymap lispm-terminal-map)) (calls 0))
+      (define-key lispm-terminal-map (kbd "C-c C-n")
+                  (lambda ()
+                    (interactive)
+                    (cl-incf calls)
+                    (should-not (buffer-local-value 'lispm-office-inspect--inline owner))
+                    (should (eq (window-buffer listener) source))
+                    (set-window-buffer listener chat)))
+      (call-interactively (key-binding (kbd "C-c C-n")))
+      (should (= calls 1))
+      (should-not (buffer-live-p owner))
+      (should (eq (window-buffer listener) chat))
+      (should (eq (window-buffer side) sessions)))))
+
 (provide 'lispm-office-focus-test)
 ;;; lispm-office-focus-test.el ends here
