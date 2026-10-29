@@ -181,10 +181,15 @@ retains its source agent's identity for inspection.
 
 The floor never reads transcripts. Cached avatar data avoids filesystem reads
 on animation ticks. There is no roster polling or global post-command hook.
-One 120 ms animation timer runs only for visible working desks, explicit waits
-between visible peers, or actual message events with visible endpoints. Its
-32-phase cycle supports typing and walking poses without reading new agent data;
-elapsed time moves visitors along their route. Idle poses alone start no timer.
+A one-shot animation timer runs only for visible working desks, explicit waits
+between visible peers, or actual message events with visible endpoints. It waits
+at least 120 ms after a frame finishes and yields to pending input, so expensive
+frames cannot build up a timer backlog. The 32-phase cycle supports typing and
+walking poses without reading new agent data. Steady poses reuse at most six
+images per scene; ticks replace the floor image without rebuilding its controls
+or layout. Full scene redraws invalidate those images. Flights and visits bypass
+the cache because elapsed time moves their positions and hit regions. Idle poses
+alone start no timer.
 Map, text and hidden views stop animation. Events
 are sequence-deduplicated, expire after one second and have a bounded queue.
 The palette is initialized through LispM UI's public API. Palette changes

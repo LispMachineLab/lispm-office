@@ -130,8 +130,10 @@ Seats are kept in =office-seats.eld= under =lispm-directory=; set
 =lispm-office-seat-file= to use another file. Set =lispm-office-animate= to =nil= to
 disable animation. Enabling the plugin does not subscribe to the roster until a
 Work view opens. The view does not poll agents and stops its timer while hidden
-or when no visible animation is needed. It initializes its palette through LispM
-UI's public API.
+or when no visible animation is needed. Animation reuses six repeating pose
+images and schedules the next frame after drawing finishes, giving input time
+to run. Moving visitors and messages keep their positions and hit regions live.
+It initializes its palette through LispM UI's public API.
 
 * Development
 

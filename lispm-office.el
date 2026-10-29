@@ -54,7 +54,7 @@
   :type 'boolean)
 
 (defcustom lispm-office-frame-interval 0.12
-  "Seconds between animation frames; no timer runs for an idle office."
+  "Minimum pause after each animation frame; idle offices have no timer."
   :type 'number)
 
 (defvar lispm-office--buffers nil "Open Office buffers, including previews.")
@@ -75,6 +75,8 @@
 (defvar-local lispm-office--text nil "Whether to use text on graphical displays too.")
 (defvar-local lispm-office--timer nil "Visible animation timer, or nil.")
 (defvar-local lispm-office--phase 0 "Working pose, toggled by animation.")
+(defvar-local lispm-office--frame-images nil
+  "At most six steady-pose images for the current floor drawing.")
 (defvar-local lispm-office--flights nil "Actual message events with expiry times.")
 (defvar-local lispm-office--sequence 0 "Last message sequence shown.")
 (defvar-local lispm-office--demo nil "Non-nil in an isolated preview.")
@@ -569,7 +571,9 @@ remains in scope; switching session returns to Session scope."
           (old-point (point))
           (window (lispm-office--window)))
       (lispm-office--prune-flights)
-      (setq lispm-office--dirty nil)
+      ;; A full redraw means scene, selection, palette or geometry may have
+      ;; changed.  Animation alone keeps this drawing and its six poses.
+      (setq lispm-office--dirty nil lispm-office--frame-images nil)
       (erase-buffer)
       (lispm-office--insert-view-menu)
       (setq lispm-office--floor-start (point))
@@ -590,22 +594,59 @@ remains in scope; switching session returns to Session scope."
                 "No agents working")
                (t "No active agents"))))
        ((lispm-office--graphic-p)
-        (let* ((now (float-time))
-               (events (mapcar (lambda (event)
-                                 (plist-put (copy-sequence event) :progress
-                                            (min 1.0 (max 0.0 (- now (plist-get event :started))))))
-                               lispm-office--flights))
-               (svg (lispm-office-render-svg (lispm-office--scene-plan) lispm-office--selected
-                                              lispm-office--scale lispm-office--phase
-                                              lispm-office--room events))
-               (start (point)))
-          (insert-image (lispm-ui-svg-image svg) "Office floor")
+        (let ((start (point)))
+          (insert-image (lispm-office--floor-image) "Office floor")
           (add-text-properties start (point)
                                (list 'keymap lispm-office-mode-map
                                      'help-echo "Click a desk to inspect it; click a map room to enter."))))
        (t (lispm-office-render-text lispm-office--plan lispm-office--selected lispm-office--room)))
       (goto-char (min old-point (point-max)))
       (when window (set-window-hscroll window 0)))))
+
+(defun lispm-office--floor-image ()
+  "Return this pose's image, reusing steady poses within one floor drawing.
+Typing and walking limb poses repeat every six phases.  Message flights
+and collaboration visits also depend on time; draw those afresh so their
+positions and hit regions remain current."
+  (let* ((nodes (lispm-office--visible-nodes))
+         (moving (or (lispm-office-render-visible-events
+                      (lispm-office--scene-plan) lispm-office--scale
+                      lispm-office--room lispm-office--flights)
+                     (seq-some
+                      (lambda (node)
+                        (seq-some (lambda (key) (lispm-office-render--endpoint key nodes))
+                                  (plist-get node :waits-on)))
+                      nodes)))
+         (phase (% lispm-office--phase 6)))
+    (if moving (setq lispm-office--frame-images nil)
+      (unless lispm-office--frame-images
+        (setq lispm-office--frame-images (make-vector 6 nil))))
+    (or (and lispm-office--frame-images (aref lispm-office--frame-images phase))
+        (let* ((now (float-time))
+               (events (mapcar (lambda (event)
+                                 (plist-put (copy-sequence event) :progress
+                                            (min 1.0 (max 0.0 (- now (plist-get event :started))))))
+                               lispm-office--flights))
+               (image (lispm-ui-svg-image
+                       (lispm-office-render-svg
+                        (lispm-office--scene-plan) lispm-office--selected
+                        lispm-office--scale lispm-office--phase lispm-office--room events))))
+          (when lispm-office--frame-images
+            (aset lispm-office--frame-images phase image))
+          image))))
+
+(defun lispm-office--draw-frame ()
+  "Replace only the floor image, keeping its geometry and controls intact."
+  (unless lispm-office--drawing
+    (if (or lispm-office--dirty
+            (not (equal lispm-office--size (lispm-office--dimensions)))
+            (>= lispm-office--floor-start (point-max))
+            (not (eq (car-safe (get-text-property lispm-office--floor-start 'display)) 'image)))
+        (lispm-office--draw)
+      (let ((lispm-office--drawing t)
+            (inhibit-read-only t))
+        (put-text-property lispm-office--floor-start (point-max) 'display
+                           (lispm-office--floor-image))))))
 
 (defun lispm-office--animated-p ()
   "Whether visible graphical content currently needs animation."
@@ -627,10 +668,10 @@ remains in scope; switching session returns to Session scope."
   "Start or cancel the animation timer according to visible work."
   (lispm-office--prune-flights)
   (if (lispm-office--animated-p)
-      (unless lispm-office--timer
+      (unless (or lispm-office--timer lispm-office--drawing)
         (setq lispm-office--timer
               (run-at-time (max 0.1 lispm-office-frame-interval)
-                           (max 0.1 lispm-office-frame-interval)
+                           nil
                            #'lispm-office--tick (current-buffer))))
     (when lispm-office--timer (cancel-timer lispm-office--timer))
     (setq lispm-office--timer nil)))
@@ -655,14 +696,23 @@ remains in scope; switching session returns to Session scope."
   "Advance BUFFER's visible animation; never read agent data."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
+      ;; Repeating timers can keep catching up when SVG serialization takes
+      ;; longer than the interval.  Schedule the next frame only after this
+      ;; one finishes, leaving input and process filters time to run.
+      (when lispm-office--timer (cancel-timer lispm-office--timer))
+      (setq lispm-office--timer nil)
       (lispm-office--prune-flights)
       (cond
-       (lispm-office-inspect--inline nil)
+       ((or lispm-office-inspect--inline lispm-office--drawing) nil)
        ((lispm-office--graphic-p)
-        (setq lispm-office--phase (mod (1+ lispm-office--phase) 32))
-        (lispm-office--draw))
+        (unless (input-pending-p)
+          (setq lispm-office--phase (mod (1+ lispm-office--phase) 32))
+          (lispm-office--draw-frame)))
        (t (setq lispm-office--flights nil)))
-      (lispm-office--sync-timer))))
+      ;; A timer can fire during a full redraw that yielded.  Defer that
+      ;; frame without losing the one-shot timer consumed above.
+      (let ((lispm-office--drawing nil))
+        (lispm-office--sync-timer)))))
 
 (defun lispm-office--ingest (records &optional event)
   "Accept RECORDS and one batch EVENT, preserving seats and selection."
