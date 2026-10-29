@@ -24,11 +24,18 @@
 (declare-function lispm-agents-roster-details "lispm-inspect" (key))
 (declare-function lispm-agents-buffer-status "lispm-agents" (buffer))
 (declare-function lispm-agents-props "lispm-agents" (agent))
+(declare-function lispm-agents-show "lispm-agents" (buffer))
 (declare-function lispm-agent-turn "lispm-core" (agent))
 (declare-function lispm-agent-name "lispm-core" (agent))
 (declare-function lispm-agent-pending "lispm-core" (agent))
 (declare-function lispm-agent-character "lispm-core" (agent))
 (declare-function lispm-agent-model "lispm-core" (agent))
+(declare-function lispm-agent-view "lispm-core" (agent))
+(declare-function lispm-agent-buffer "lispm-core" (agent))
+(declare-function lispm-agents "lispm-core" ())
+(declare-function lispm-switch "lispm" (agent))
+(declare-function lispm-agent-display-buffer "lispm" (agent))
+(declare-function lispm-office--prepare-navigation "lispm-office" (owner))
 (declare-function lispm-waiting-calls "lispm-runtime" (agent))
 (declare-function lispm-asked "lispm-runtime" (call))
 (declare-function lispm-approve-for "lispm-runtime" (agent &optional id))
@@ -48,6 +55,7 @@
 
 (defvar lispm-office-inspect--buffers nil
   "Alist of Office owners to their inspector buffers.")
+(defvar lispm-agents-show-function)
 (defvar-local lispm-office-inspect--owner nil
   "The Office buffer owning this inspector.")
 (defvar-local lispm-office-inspect--key nil
@@ -94,9 +102,61 @@ No remembered buffer or agent object authorizes an action."
       (user-error "The conversation changed; inspect it again"))
     fresh))
 
+(defun lispm-office-inspect--display-chat (buffer alist)
+  "Display BUFFER in an ordinary window, keeping Inspector side panes.
+Prefer the window of ALIST's `lispm-office-owner', then one already
+showing BUFFER.  This is a `display-buffer' action function."
+  (let* ((windows (window-list nil 'nomini))
+         (ordinary (seq-remove (lambda (window) (window-parameter window 'window-side))
+                               windows))
+         (owner (alist-get 'lispm-office-owner alist))
+         (window (or (seq-find (lambda (window)
+                                (and (eq (window-buffer window) owner)
+                                     (not (window-dedicated-p window)))) ordinary)
+                     (seq-find (lambda (window) (eq (window-buffer window) buffer)) ordinary)
+                     (seq-find (lambda (window) (not (window-dedicated-p window))) ordinary))))
+    (when window
+      (set-window-buffer window buffer)
+      window)))
+
 (defun lispm-office-open-chat (key)
-  "Open the live conversation with stable KEY."
-  (pop-to-buffer (plist-get (lispm-office-inspect--target key 'open-chat) :buffer)))
+  "Return from Office to the live conversation with stable KEY.
+A native agent's existing chat takes precedence over its hidden
+transcript.  A missing chat may be opened only while the same live
+session is still registered.  The Agent host controls where it opens."
+  (let* ((target (lispm-office-inspect--target key 'open-chat))
+         (buffer (plist-get target :buffer))
+         (agent (plist-get target :agent))
+         (view (and agent (lispm-agent-view agent)))
+         (owner (or lispm-office-inspect--owner (current-buffer)))
+         (display-buffer-overriding-action
+          (if (eq lispm-agents-show-function #'pop-to-buffer)
+              `((lispm-office-inspect--display-chat display-buffer-pop-up-window)
+                (lispm-office-owner . ,owner))
+            display-buffer-overriding-action))
+         (chat
+          (cond ((buffer-live-p view) view)
+                ((and agent (or (fboundp 'lispm-agent-display-buffer)
+                                (fboundp 'lispm-switch)))
+                 (unless (and (eq buffer (lispm-agent-buffer agent))
+                              (memq agent (lispm-agents)))
+                   (user-error "This conversation has ended; it cannot be reopened here"))
+                 (if (fboundp 'lispm-agent-display-buffer)
+                     (lispm-agent-display-buffer agent)
+                   (lispm-switch agent)))
+                (t buffer))))
+    (when (and (not (eq lispm-agents-show-function #'pop-to-buffer))
+               (buffer-live-p owner)
+               (with-current-buffer owner (derived-mode-p 'lispm-office-mode)))
+      (lispm-office--prepare-navigation owner))
+    (prog1 (lispm-agents-show chat)
+      (when (and (buffer-live-p owner)
+                 (with-current-buffer owner (derived-mode-p 'lispm-office-mode))
+                 (not (get-buffer-window owner t)))
+        ;; The core's close hook clears saved window state and closes the
+        ;; owned Inspector.  Its window changes must not undo host navigation.
+        (save-selected-window
+          (save-current-buffer (kill-buffer owner)))))))
 
 (defun lispm-office-send (key text)
   "Send TEXT as the user's next message to the live conversation KEY."
@@ -366,10 +426,15 @@ a new call that happens to reuse the old call's id."
 
 (defun lispm-office-inspect--draw ()
   "Refresh this inspector, preserving point and the selected tab."
+  (unless lispm-ui-current-palette
+    (lispm-ui-palette-follow-theme))
   (let ((inhibit-read-only t) (position (point)))
     (erase-buffer)
     (condition-case error
-        (let* ((target (lispm-office-inspect--target lispm-office-inspect--key))
+        (let* ((target (progn
+                         (unless lispm-office-inspect--key
+                           (user-error "Waiting for current session identity"))
+                         (lispm-office-inspect--target lispm-office-inspect--key)))
                (status (lispm-agents-buffer-status (plist-get target :buffer))))
           (insert (propertize (lispm-office-inspect--text (plist-get target :name)) 'face 'bold) "\n")
           (lispm-office-inspect--line "State" (plist-get status :state))
@@ -425,7 +490,7 @@ a new call that happens to reuse the old call's id."
 (defun lispm-office-inspect-quit ()
   "Close this inspector, removing it from the owner's subscriptions."
   (interactive)
-  (quit-window t))
+  (lispm-office-inspect--close-buffer (current-buffer)))
 
 (defun lispm-office-inspect--forget ()
   "Remove this inspector from its owner registry when it is killed."
@@ -465,8 +530,31 @@ buffer.  An existing inspector for this owner keeps its selected tab."
         (unless (memq tab '(work mailbox character)) (user-error "Unknown inspector tab"))
         (setq lispm-office-inspect--tab tab))
       (lispm-office-inspect--draw))
-    (pop-to-buffer buffer)
+    (if-let* ((window (seq-find (lambda (window) (window-parameter window 'window-side))
+                               (get-buffer-window-list owner nil (selected-frame)))))
+        (select-window
+         (display-buffer-in-side-window
+          buffer `((side . ,(window-parameter window 'window-side))
+                   (slot . ,(1+ (or (window-parameter window 'window-slot) 0)))
+                   (window-width . ,(window-total-width window)))))
+      (select-window
+       (display-buffer-in-side-window buffer '((side . right) (slot . 0)))))
     buffer))
+
+(defun lispm-office-inspect-follow (owner key)
+  "Retarget OWNER's existing inspector to KEY without taking focus.
+Nil KEY shows a pending session identity without reading agent details.
+Preserve its tab, and defer details until visible.  This does not
+create or display an inspector."
+  (when-let* ((buffer (cdr (assq owner lispm-office-inspect--buffers)))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (unless (equal key lispm-office-inspect--key)
+        (when key (lispm-office-inspect--target key))
+        (setq lispm-office-inspect--key (copy-sequence key)
+              lispm-office-inspect--dirty t)
+        (when (lispm-office-inspect--visible-p)
+          (lispm-office-inspect--draw))))))
 
 (defun lispm-office-inspect-refresh (owner keys)
   "Refresh OWNER's inspector only if its selected identity is in KEYS.
@@ -496,7 +584,14 @@ The Office calls this from its window visibility callback."
 (defun lispm-office-inspect-close (owner)
   "Close only the inspector belonging to OWNER."
   (when-let* ((buffer (cdr (assq owner lispm-office-inspect--buffers))))
-    (when (buffer-live-p buffer) (kill-buffer buffer))))
+    (lispm-office-inspect--close-buffer buffer)))
+
+(defun lispm-office-inspect--close-buffer (buffer)
+  "Close BUFFER and its windows without changing source conversations."
+  (when (buffer-live-p buffer)
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (quit-window nil window))
+    (kill-buffer buffer)))
 
 (provide 'lispm-office-inspect)
 ;;; lispm-office-inspect.el ends here

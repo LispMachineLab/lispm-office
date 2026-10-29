@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: LispMachineLab/lispm-agent
-          # Roster API, PR #135; advance when that dependency is released.
+          # Roster API merged in PR #135; pin the tested dependency revision.
           ref: 2a089207c7e1c1a8ea761d004e29aa380f61c714
           path: .deps/lispm-agent
       - uses: purcell/setup-emacs@v8.0

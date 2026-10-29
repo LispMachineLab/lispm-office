@@ -100,7 +100,7 @@ The actual SVG image implementation is used."
       (should (= roster-reads 0))
       (should-not (file-exists-p lispm-office-seat-file)))))
 
-(ert-deftest lispm-office-unavailable-api-explains-live-versus-preview ()
+(ert-deftest lispm-office-unavailable-api-explains-dependency ()
   (lispm-office-test--isolated
     (let ((original-require (symbol-function 'require)))
       (cl-letf (((symbol-function 'require)
@@ -109,7 +109,7 @@ The actual SVG image implementation is used."
                      (funcall original-require feature filename noerror)))))
         (let ((error (should-error (lispm-office) :type 'user-error)))
           (should (string-match-p "roster API" (error-message-string error)))
-          (should (string-match-p "lispm-office-demo" (error-message-string error))))))
+          (should (string-match-p "Update lispm-agent" (error-message-string error))))))
     (should-not lispm-office--buffers)
     (should-not (file-exists-p lispm-office-seat-file))))
 
