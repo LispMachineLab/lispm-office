@@ -1,0 +1,226 @@
+;;; lispm-office-scene-test.el --- Furnished scenes and moving people -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'cl-lib)
+(require 'xml)
+(require 'lispm-office-render)
+
+(defmacro lispm-office-scene-test--isolated (&rest body)
+  "Run BODY with independent scene identity and animation caches."
+  (declare (indent 0) (debug t))
+  `(let ((lispm-office-render--room-assignments (make-hash-table :test #'equal))
+         (lispm-office-render--room-pool nil)
+         (lispm-office-render--portrait-assignments (make-hash-table :test #'equal))
+         (lispm-office-render--portrait-pool nil)
+         (lispm-office-render--visits (make-hash-table :test #'equal))
+         (lispm-office-render--actor-hits (make-hash-table :test #'eq)))
+     ,@body))
+
+(defun lispm-office-scene-test--plan (&optional waits)
+  "Return a real three-agent plan, optionally with A explicitly awaiting B."
+  (let* ((records
+          (list (list :key '(lispm "a") :name "Ada" :kind 'lispm :root "/tmp/scene/"
+                      :status '(:state blocked :kind agent)
+                      :waits-on (and waits '((lispm "b"))))
+                '(:key (lispm "b") :name "Bob" :kind lispm :root "/tmp/scene/"
+                  :status (:state idle))
+                '(:key (lispm "c") :name "Cleo" :kind lispm :root "/tmp/scene/"
+                  :status (:state working))))
+         (state (lispm-office-layout-reconcile nil records)))
+    (lispm-office-layout-plan state records)))
+
+(defun lispm-office-scene-test--node (plan key)
+  "Find the node with KEY in PLAN."
+  (seq-find (lambda (node) (equal key (plist-get node :key))) (plist-get plan :nodes)))
+
+(defun lispm-office-scene-test--rect-geometry (drawing)
+  "Return visible rectangle geometry without pose labels or metadata."
+  (mapcar (lambda (rect) (mapcar (lambda (attr) (dom-attr rect attr)) '(x y width height)))
+          (dom-by-tag drawing 'rect)))
+
+(defun lispm-office-scene-test--visitor-point (svg)
+  "Return a visible torso point in SVG's first visitor, in world coordinates."
+  (let* ((visitor (car (dom-by-class svg "office-visitor")))
+         (person (car (dom-by-class visitor "office-person")))
+         (rect (car (dom-by-tag person 'rect)))
+         (transform (dom-attr visitor 'transform)))
+    (should (string-match "\\`translate(\\([^ ]+\\) \\([^)]*\\))\\'" transform))
+    (cons (+ (string-to-number (match-string 1 transform))
+             (dom-attr rect 'x) (/ (dom-attr rect 'width) 2.0))
+          (+ (string-to-number (match-string 2 transform))
+             (dom-attr rect 'y) (/ (dom-attr rect 'height) 2.0)))))
+
+(ert-deftest lispm-office-scene-eight-interiors-have-distinct-visible-patterns ()
+  (lispm-office-scene-test--isolated
+    (should (>= (length lispm-office-render--room-styles) 8))
+    (let ((room (car (plist-get (lispm-office-scene-test--plan) :rooms))) ids drawings)
+      (seq-doseq (style lispm-office-render--room-styles)
+        (let ((svg (svg-create 500 500)))
+          (cl-letf (((symbol-function 'lispm-office-render--room-style) (lambda (_) style)))
+            (lispm-office-render--room-drawing svg room nil 'desk 1))
+          (push (dom-attr (car (dom-by-class svg "office-room")) 'data-interior) ids)
+          (should (>= (length (dom-by-tag svg 'pattern)) 2))
+          ;; Ignore the style id: floors and wallpaper must actually differ.
+          (push (dom-by-tag svg 'rect) drawings)))
+      (should (= (length (delete-dups ids)) (length lispm-office-render--room-styles)))
+      (should (= (length (delete-dups drawings)) (length lispm-office-render--room-styles))))))
+
+(ert-deftest lispm-office-scene-interiors-are-randomized-once-per-room-identity ()
+  (lispm-office-scene-test--isolated
+    (let ((calls 0) identities)
+      (cl-letf (((symbol-function 'random) (lambda (_limit) (cl-incf calls) 0)))
+        (dotimes (index (length lispm-office-render--room-styles))
+          (let* ((room (list :root (format "/tmp/scene-%d/" index) :id index))
+                 (style (lispm-office-render--room-style room)))
+            (push (plist-get style :id) identities)
+            (lispm-office-render-clear-cache)
+            (setf (plist-get room :label) "Renamed room"
+                  (plist-get room :width) 1000)
+            (should (equal style (lispm-office-render--room-style (copy-tree room))))))
+        (should (> calls 0))
+        (should (= (length (delete-dups identities)) (length lispm-office-render--room-styles)))
+        (let ((before calls))
+          (dotimes (index (length lispm-office-render--room-styles))
+            (lispm-office-render--room-style (list :root (format "/tmp/scene-%d/" index) :id index)))
+          (should (= before calls)))))))
+
+(ert-deftest lispm-office-scene-room-sign-is-centered-and-selection-keeps-interior ()
+  (lispm-office-scene-test--isolated
+    (let* ((room (car (plist-get (lispm-office-scene-test--plan) :rooms)))
+           (lispm-office-render--palette '(:focus "#0000ff" :content "#ffffff"))
+           (a (svg-create 500 500)) (b (svg-create 500 500)))
+      (setf (plist-get room :label) "Studio")
+      (lispm-office-render--room-drawing a room nil 'desk 1)
+      (lispm-office-render--room-drawing b room '(lispm "a") 'desk 1)
+      (should (equal a b))
+      (let ((sign (seq-find (lambda (node) (equal (dom-texts node) "Studio")) (dom-by-tag a 'text))))
+        (should sign)
+        (should (equal (dom-attr sign 'text-anchor) "middle"))
+        (should (= (dom-attr sign 'x) (+ (plist-get room :x) (/ (plist-get room :width) 2.0)))))
+      (dolist (rect (dom-by-tag a 'rect))
+        (should-not (equal (dom-attr rect 'fill) "#0000ff"))))))
+
+(ert-deftest lispm-office-scene-coffee-typing-and-help-use-different-body-geometry ()
+  (lispm-office-scene-test--isolated
+    (let ((node (copy-tree (car (plist-get (lispm-office-scene-test--plan) :nodes)))) poses)
+      (dolist (spec '((idle . "coffee") (working . "typing") (blocked . "help")))
+        (setf (plist-get node :status) (list :state (car spec)))
+        (let ((a (svg-create 90 80)) (b (svg-create 90 80)))
+          (lispm-office-render--worker a node 'desk 0)
+          (lispm-office-render--worker b node 'desk 1)
+          (should (equal (dom-attr a 'data-pose) (cdr spec)))
+          (should (equal (dom-attr (car (dom-by-class a "office-person")) 'data-pose) (cdr spec)))
+          (push (lispm-office-scene-test--rect-geometry a) poses)
+          (if (eq (car spec) 'working)
+              (should-not (equal (lispm-office-scene-test--rect-geometry a)
+                                 (lispm-office-scene-test--rect-geometry b)))
+            (should (equal a b)))))
+      (should (= (length (delete-dups poses)) 3))
+      (let ((away (svg-create 90 80)))
+        (lispm-office-render--worker away node 'desk 0 t)
+        (should (equal (dom-attr away 'data-pose) "away"))
+        (should-not (dom-by-class away "office-person"))
+        (should (dom-by-class away "office-station"))))))
+
+(ert-deftest lispm-office-scene-explicit-collaboration-walks-then-talks-with-fixed-desks ()
+  (lispm-office-scene-test--isolated
+    (let* ((plan (lispm-office-scene-test--plan t)) (before (copy-tree plan))
+           (nodes (plist-get plan :nodes))
+           (path (lispm-office-layout-walk-path plan '(lispm "a") '(lispm "b")))
+           (clock 100.0) first-transform stations)
+      (should path)
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock)))
+        (let* ((actor (car (lispm-office-render--visitors plan nodes)))
+               (svg (lispm-office-render-svg plan nil 1 0)))
+          (should (equal (plist-get actor :feet) (car path)))
+          (should (eq (plist-get actor :pose) 'walking))
+          (setq stations (copy-tree (dom-by-class svg "office-station"))
+                first-transform (dom-attr (car (dom-by-class svg "office-visitor")) 'transform)))
+        (setq clock 100.7)
+        (let* ((actor (car (lispm-office-render--visitors plan nodes)))
+               (svg (lispm-office-render-svg plan nil 1 0)))
+          (should (eq (plist-get actor :pose) 'walking))
+          (should-not (equal (plist-get actor :feet) (car path)))
+          (should-not (equal (plist-get actor :feet) (car (last path))))
+          (should-not (equal first-transform
+                             (dom-attr (car (dom-by-class svg "office-visitor")) 'transform)))
+          (should (equal stations (dom-by-class svg "office-station"))))
+        (setq clock 102.0)
+        (let ((actor (car (lispm-office-render--visitors plan nodes))))
+          (should (equal (plist-get actor :feet) (car (last path))))
+          (should (eq (plist-get actor :pose) 'talking))
+          (setq clock 110.0)
+          (should (equal actor (car (lispm-office-render--visitors plan nodes))))))
+      (should (equal before plan)))))
+
+(ert-deftest lispm-office-scene-visible-visitor-hit-follows-the-latest-drawing ()
+  (lispm-office-scene-test--isolated
+    (let* ((plan (lispm-office-scene-test--plan t))
+           (peer (lispm-office-scene-test--node plan '(lispm "b")))
+           (room-id (plist-get peer :room)) (clock 100.0) (scale 1.25))
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock)))
+        (lispm-office-render-svg plan nil scale 0 room-id)
+        (setq clock 102.0)
+        (let* ((svg (lispm-office-render-svg plan nil scale 0 room-id))
+               (point (lispm-office-scene-test--visitor-point svg))
+               (projection (lispm-office-render-projection plan scale room-id))
+               (x (* (plist-get projection :scale) (- (car point) (plist-get projection :x))))
+               (y (* (plist-get projection :scale) (- (cdr point) (plist-get projection :y)))))
+          (should (equal (lispm-office-render-hit-test plan x y scale room-id) '(:key (lispm "a"))))
+          ;; The last drawn coordinates remain the click targets between frames.
+          (setq clock 1000.0)
+          (should (equal (lispm-office-render-hit-test plan x y scale room-id) '(:key (lispm "a")))))
+        (lispm-office-render-svg plan nil 0.25 0)
+        (should-not (gethash plan lispm-office-render--actor-hits))))))
+
+(ert-deftest lispm-office-scene-serialized-svg-preserves-station-and-visitor-identities ()
+  (lispm-office-scene-test--isolated
+    (let* ((plan (lispm-office-scene-test--plan t))
+           (svg (lispm-office-render-svg plan nil 1 0))
+           (parsed (with-temp-buffer
+                     (svg-print svg)
+                     (car (xml-parse-region (point-min) (point-max))))))
+      (should (= (length (dom-by-class parsed "office-station")) 3))
+      (should (= (length (dom-by-class parsed "office-visitor")) 1))
+      (should (equal (dom-attr (car (dom-by-class parsed "office-visitor")) 'data-key)
+                     (prin1-to-string '(lispm "a")))))))
+
+(ert-deftest lispm-office-scene-help-pose-has-no-redundant-provider-or-status-labels ()
+  (lispm-office-scene-test--isolated
+    (let* ((plan (lispm-office-scene-test--plan))
+           (source (lispm-office-scene-test--node plan '(lispm "a"))))
+      (dolist (kind '(agent permission auth))
+        (setf (plist-get source :status) (list :state 'blocked :kind kind))
+        (let ((svg (lispm-office-render-svg plan nil 1 0)))
+          (should (seq-some (lambda (person) (equal (dom-attr person 'data-pose) "help"))
+                            (dom-by-class svg "office-person")))
+          (should-not (string-match-p "\\b\\(?:WAIT\\|AUTH\\|LISPM\\|CLAUDE\\|CODEX\\)\\b"
+                                      (dom-texts svg)))
+          (should (string-match-p "Ada" (dom-texts svg)))))
+      ;; The accessible text view retains the status information.
+      (with-temp-buffer
+        (lispm-office-render-text plan nil)
+        (should (string-match-p "AUTH" (buffer-string)))))))
+
+(ert-deftest lispm-office-scene-never-invents-peer-visits-and-stops-settled-ones ()
+  (lispm-office-scene-test--isolated
+    (let* ((plan (lispm-office-scene-test--plan))
+           (source (lispm-office-scene-test--node plan '(lispm "a")))
+           (clock 100.0))
+      (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock)))
+        (should-not (dom-by-class (lispm-office-render-svg plan nil 1 0) "office-visitor"))
+        (setf (plist-get source :waits-on) '((lispm "missing")))
+        (should-not (dom-by-class (lispm-office-render-svg plan nil 1 0) "office-visitor"))
+        (should (= (hash-table-count lispm-office-render--visits) 0))
+        (setf (plist-get source :waits-on) '((lispm "b")))
+        (should (= (length (dom-by-class (lispm-office-render-svg plan nil 1 0) "office-visitor")) 1))
+        (setf (plist-get source :waits-on) nil)
+        (let ((svg (lispm-office-render-svg plan nil 1 0)))
+          (should-not (dom-by-class svg "office-visitor"))
+          (should-not (seq-some (lambda (worker) (equal (dom-attr worker 'data-pose) "away"))
+                                (dom-by-class svg "office-worker")))
+          (should (= (hash-table-count lispm-office-render--visits) 0))
+          (should-not (dom-by-class svg "office-wait")))))))
+
+(provide 'lispm-office-scene-test)
+;;; lispm-office-scene-test.el ends here

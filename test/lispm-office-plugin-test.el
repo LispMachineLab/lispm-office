@@ -248,7 +248,7 @@ model requests, messages and permission actions must never run."
           (with-current-buffer office
             (should-not lispm-office--selected)
             (should-error (lispm-office--key) :type 'user-error)
-            (should (string-match-p "[Ww]aiting.*session" (buffer-string))))
+            (should (string-match-p "Session is starting…" (buffer-string))))
           ;; Other agents can update while this terminal is still waiting
           ;; for its identity; none of them may become its action target.
           (lispm-agents-roster-notify agent '(status))

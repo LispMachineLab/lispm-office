@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'tab-bar)
 (require 'lispm-office-inspect)
 (require 'lispm-office)
 
@@ -108,6 +109,139 @@
       (should-not (window-live-p inspector-window))
       (should (eq (window-buffer office-window) owner))
       (should (buffer-live-p source)))))
+
+(ert-deftest lispm-office-inspect-close-removes-reused-placeholder-pane ()
+  (lispm-office-inspect-test--with-work-office
+    (let ((placeholder (generate-new-buffer " *Old buffer *LispM Office Inspector**")))
+      (unwind-protect
+          (let* ((stale-window (display-buffer-in-side-window
+                                placeholder '((side . right) (slot . 0))))
+                 (inspector (lispm-office-inspect key 'work owner))
+                 (inspector-window (selected-window)))
+            ;; Emacs remembers the old placeholder as quit-window's return
+            ;; buffer when the Inspector reuses this slot.
+            (should (eq inspector-window stale-window))
+            (should (window-parameter inspector-window 'quit-restore))
+            (lispm-office-inspect-close owner)
+            (should-not (buffer-live-p inspector))
+            (should-not (window-live-p inspector-window))
+            (should (= 1 (length (window-list nil 'nomini))))
+            (should (eq (window-buffer office-window) owner))
+            (should (buffer-live-p source)))
+        (when (buffer-live-p placeholder) (kill-buffer placeholder))))))
+
+(ert-deftest lispm-office-inspect-killing-buffer-removes-its-owned-pane ()
+  (lispm-office-inspect-test--with-work-office
+    (let* ((inspector (lispm-office-inspect key 'work owner))
+           (inspector-window (selected-window)))
+      (should (equal (window-parameter inspector-window 'lispm-office-inspector)
+                     (buffer-name inspector)))
+      (kill-buffer inspector)
+      (should-not (window-live-p inspector-window))
+      (should-not lispm-office-inspect--buffers)
+      (should (eq (window-buffer office-window) owner))
+      (should (buffer-live-p source)))))
+
+(ert-deftest lispm-office-inspect-close-preserves-a-repurposed-pane ()
+  (lispm-office-inspect-test--with-work-office
+    (let ((replacement (generate-new-buffer " *Unrelated pane contents*")))
+      (unwind-protect
+          (let* ((inspector (lispm-office-inspect key 'work owner))
+                 (inspector-window (selected-window)))
+            (with-current-buffer replacement (insert "Keep this user's buffer"))
+            (set-window-dedicated-p inspector-window nil)
+            (set-window-buffer inspector-window replacement)
+            (lispm-office-inspect-close owner)
+            (lispm-office-inspect-cleanup-windows)
+            (should-not (buffer-live-p inspector))
+            (should (window-live-p inspector-window))
+            (should (eq (window-buffer inspector-window) replacement))
+            (should-not (window-parameter inspector-window 'lispm-office-inspector))
+            (should (equal (with-current-buffer replacement (buffer-string))
+                           "Keep this user's buffer"))
+            (should (eq (window-buffer office-window) owner)))
+        (with-current-buffer replacement (set-buffer-modified-p nil))
+        (kill-buffer replacement)))))
+
+(ert-deftest lispm-office-inspect-close-preserves-last-ordinary-window ()
+  (lispm-office-inspect-test--with-work-office
+    (let ((inspector (lispm-office-inspect key 'work owner)))
+      ;; A user can move the Inspector out of its side pane into the main window.
+      (delete-window (selected-window))
+      (set-window-buffer office-window inspector)
+      (select-window office-window)
+      (lispm-office-inspect-close owner)
+      (should (window-live-p office-window))
+      (should (eq (selected-window) office-window))
+      (should (eq (window-buffer office-window) owner))
+      (should (= 1 (length (window-list nil 'nomini))))
+      (should-not (buffer-live-p inspector)))))
+
+(ert-deftest lispm-office-inspect-restored-tab-removes-only-dead-inspector ()
+  (lispm-office-inspect-test--with-work-office
+    (let* ((saved-tabs (copy-tree (frame-parameter nil 'tabs)))
+           (source-tab (1+ (tab-bar--current-tab-index)))
+           (tab-bar-new-tab-to 'right)
+           (tab-bar-new-tab-choice "*scratch*")
+           (window-state-change-functions nil)
+           placeholder restored-marker target-tab
+           (tab-bar-tab-post-select-functions
+            (list (lambda (&rest _)
+                    (dolist (window (window-list nil 'nomini))
+                      (when (lispm-office-inspect--placeholder-p (window-buffer window))
+                        (setq placeholder (window-buffer window)
+                              restored-marker
+                              (window-parameter window 'lispm-office-inspector)))))
+                  #'lispm-office-inspect-cleanup-windows))
+           (inspector (lispm-office-inspect key 'work owner)))
+      (unwind-protect
+          (progn
+            (tab-bar-new-tab)
+            (setq target-tab (1+ (tab-bar--current-tab-index)))
+            ;; Closing from another workspace leaves an inactive configuration
+            ;; referring to the Inspector that no longer exists.
+            (lispm-office-inspect-close owner)
+            (should-not (buffer-live-p inspector))
+            (tab-bar-select-tab source-tab)
+            (should placeholder)
+            (should (stringp restored-marker))
+            (should (= 1 (length (window-list nil 'nomini))))
+            (should (eq (window-buffer (selected-window)) owner))
+            (should-not (buffer-live-p placeholder))
+            (should (buffer-live-p source))
+            (tab-bar-close-tab target-tab source-tab)
+            (setq target-tab nil))
+        (when target-tab (tab-bar-close-tab target-tab))
+        (set-frame-parameter nil 'tabs saved-tabs)
+        (when (buffer-live-p placeholder) (kill-buffer placeholder))))))
+
+(ert-deftest lispm-office-inspect-cleans-legacy-notice-but-keeps-unrelated-notices ()
+  (lispm-office-inspect-test--with-work-office
+    (let ((legacy-window (display-buffer-in-side-window
+                          (get-buffer-create " *Legacy inspector slot*")
+                          '((side . right) (slot . 0))))
+          (unrelated-window (display-buffer-in-side-window
+                             (get-buffer-create " *Unrelated old slot*")
+                             '((side . right) (slot . 1))))
+          legacy-notice unrelated-notice)
+      (unwind-protect
+          (progn
+            (tab-bar-select-restore-windows
+             nil (list (list legacy-window "*LispM Office Inspector*" 1 1)
+                       (list unrelated-window "*Unrelated utility*" 1 1)) nil)
+            (setq legacy-notice (window-buffer legacy-window)
+                  unrelated-notice (window-buffer unrelated-window))
+            (should-not (window-parameter legacy-window 'lispm-office-inspector))
+            (run-hook-with-args 'tab-bar-tab-post-select-functions nil nil)
+            (should-not (window-live-p legacy-window))
+            (should-not (buffer-live-p legacy-notice))
+            (should (window-live-p unrelated-window))
+            (should (eq (window-buffer unrelated-window) unrelated-notice))
+            (should (eq (window-buffer office-window) owner)))
+        (dolist (buffer (list legacy-notice unrelated-notice
+                              (get-buffer " *Legacy inspector slot*")
+                              (get-buffer " *Unrelated old slot*")))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
 
 (ert-deftest lispm-office-open-chat-returns-native-view-to-owner-work-window ()
   (lispm-office-inspect-test--with-work-office

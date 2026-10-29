@@ -34,6 +34,8 @@
 (declare-function lispm-agents-buffer-p "lispm-agents" (buffer))
 (declare-function lispm-agents-waiting-buffers "lispm-agents" ())
 (declare-function lispm-office-demo-records "lispm-office-demo" (count))
+(declare-function lispm-desktop-platinum-tabs "lispm-desktop-platinum-controls" (tabs width &optional face))
+(declare-function lispm-desktop-platinum-tabs-width "lispm-desktop-platinum-controls" (labels &optional face))
 (defvar lispm-agents-roster-change-functions)
 (defvar lispm-directory)
 (defvar lispm-office-mode-map)
@@ -50,7 +52,7 @@
   "Whether visible working agents and delivered messages animate."
   :type 'boolean)
 
-(defcustom lispm-office-frame-interval 0.25
+(defcustom lispm-office-frame-interval 0.12
   "Seconds between animation frames; no timer runs for an idle office."
   :type 'number)
 
@@ -80,32 +82,50 @@
 (defvar-local lispm-office--seat-path nil "Seat file selected when Office opened.")
 (defvar-local lispm-office--dirty nil "Whether hidden content needs drawing when shown.")
 (defvar-local lispm-office--unsaved nil "Whether seat changes still need writing.")
-(defvar-local lispm-office--floor-start 1 "Start of desk content after the waiting strip.")
+(defvar-local lispm-office--floor-start 1 "Start of desk content after the view menu.")
 (defvar-local lispm-office--source-buffer nil "Agent buffer whose current work is shown.")
 (defvar-local lispm-office--source-key nil "Last identity followed from the source buffer.")
+
+;; Return contexts contain live buffers and markers.  Keep them in this Emacs
+;; session's window configurations, but never serialize them to desktop files.
+(add-to-list 'window-persistent-parameters '(lispm-office-source . t))
 
 (defun lispm-office--ensure-ui ()
   "Initialize LispM UI controls when the host has not done so."
   (unless lispm-ui-current-palette (lispm-ui-palette-follow-theme)))
 
 (defun lispm-office--view-switcher ()
-  "Draw the Conversation / Work switch using the host's LispM UI controls."
+  "Return the host's adjacent Conversation / Work tabs.
+A directory view has no conversation tab or inferred conversation target."
   (let ((work (derived-mode-p 'lispm-office-mode)))
-    (mapconcat
-     (lambda (entry)
-       (let* ((to-work (cdr entry))
-              (active (eq (not (null work)) to-work))
-              (map (make-sparse-keymap))
-              (button (lispm-ui-bevel-button (car entry) (and active 'pressed))))
-         (define-key map [header-line mouse-1]
-                     (lambda (event)
-                       (interactive "e")
-                       (select-window (posn-window (event-start event)))
-                       (unless active (lispm-office-toggle))))
-         (propertize button 'local-map map 'mouse-face 'highlight
-                     'help-echo (concat "Switch to " (car entry))
-                     'lispm-ui-label (car entry))))
-     '(("Conversation") ("Work" . t)) " ")))
+    (if (and work (not (lispm-office--source-p lispm-office--source-buffer))) ""
+      (let ((tabs
+             (mapcar
+              (lambda (entry)
+                (let* ((active (eq (not (null work)) (cdr entry)))
+                       (map (make-sparse-keymap)))
+                  (define-key map [header-line mouse-1]
+                              (lambda (event)
+                                (interactive "e")
+                                (select-window (posn-window (event-start event)))
+                                (unless active (lispm-office-toggle))))
+                  (list (car entry) active 'local-map map 'keymap map
+                        'mouse-face 'highlight 'pointer 'arrow
+                        'help-echo (concat "Switch to " (car entry))
+                        'lispm-ui-label (car entry))))
+              '(("Conversation") ("Work" . t)))))
+        (if (and (fboundp 'lispm-desktop-platinum-tabs)
+                 (fboundp 'lispm-desktop-platinum-tabs-width))
+            (lispm-desktop-platinum-tabs
+             tabs (min (window-body-width nil t)
+                       (lispm-desktop-platinum-tabs-width (mapcar #'car tabs))))
+          ;; Without Desktop, use Emacs' native tab faces, retaining the same
+          ;; event maps and adjacent tabs rather than imitating a push button.
+          (mapconcat
+           (pcase-lambda (`(,label ,active . ,properties))
+             (apply #'propertize (concat " " label " ")
+                    'face (if active 'tab-line-tab-current 'tab-line-tab) properties))
+           tabs ""))))))
 
 (defun lispm-office--restore-window (window)
   "Restore WINDOW's conversation and its exact saved viewing position."
@@ -119,12 +139,50 @@
         (set-window-buffer window (if (buffer-live-p source) source
                                     (other-buffer (window-buffer window) t)))
         (when (buffer-live-p source)
-          (set-window-point window point)
-          (set-window-start window start t)
+          (set-window-point window (or (and (markerp point) (marker-position point))
+                                       (plist-get saved :point-position) 1))
+          (set-window-start window (or (and (markerp start) (marker-position start))
+                                       (plist-get saved :start-position) 1) t)
           (set-window-hscroll window (plist-get saved :hscroll))
           (set-window-vscroll window (plist-get saved :vscroll) t)))
-      (when (markerp point) (set-marker point nil))
-      (when (markerp start) (set-marker start nil)))))
+      ;; Tab window configurations retain this plist.  Keep integer fallbacks
+      ;; before releasing its markers, so a later restore can recover its view.
+      (when (and (markerp point) (marker-position point))
+        (setf (plist-get saved :point-position) (marker-position point))
+        (set-marker point nil))
+      (when (and (markerp start) (marker-position start))
+        (setf (plist-get saved :start-position) (marker-position start))
+        (set-marker start nil)))))
+
+(defun lispm-office-cleanup-windows (&rest _)
+  "Restore a conversation if a saved workspace resurrected its closed Work view.
+Only a generated placeholder with the original Office return context qualifies.
+The Inspector's workspace cleanup invokes this after tab restoration."
+  (save-selected-window
+    (walk-windows
+     (lambda (window)
+       (let* ((saved (window-parameter window 'lispm-office-source))
+              (view (plist-get saved :view))
+              (buffer (window-buffer window))
+              (name (or (plist-get saved :view-name)
+                        (and (bufferp view) (buffer-last-name view)))))
+         (when (and saved (bufferp view) (not (buffer-live-p view)) name
+                    (with-current-buffer buffer
+                      (and (eq major-mode 'special-mode)
+                           (string-prefix-p (format " *Old buffer %s*" name) (buffer-name))
+                           (string-prefix-p "This window displayed the buffer " (buffer-string)))))
+           ;; Set the saved source before restoring its position; the normal
+           ;; return path checks that the window still displays the live view.
+           (let ((source (plist-get saved :buffer)))
+             (set-window-buffer window (if (buffer-live-p source) source (other-buffer buffer t)))
+             (when (buffer-live-p source)
+               (set-window-point window (or (plist-get saved :point-position) 1))
+               (set-window-start window (or (plist-get saved :start-position) 1) t)
+               (set-window-hscroll window (or (plist-get saved :hscroll) 0))
+               (set-window-vscroll window (or (plist-get saved :vscroll) 0) t)))
+           (lispm-office--restore-window window)
+           (unless (get-buffer-window buffer t) (kill-buffer buffer)))))
+     'no-minibuf t)))
 
 (defun lispm-office-return ()
   "Return this window to its conversation, preserving the running session."
@@ -411,12 +469,56 @@ remains in scope; switching session returns to Session scope."
         (delq nil (mapcar (lambda (buffer) (gethash buffer by-buffer))
                          (lispm-agents-waiting-buffers)))))))
 
-(defun lispm-office--button (label function)
-  "Insert a LABEL button invoking FUNCTION in the Office buffer."
-  (let ((owner (current-buffer)))
-    (lispm-ui-insert-push-button
-     label (lambda () (when (buffer-live-p owner)
-                        (with-current-buffer owner (funcall function)))))))
+(defun lispm-office--view-choices ()
+  "Return the compact view menu's commands without querying agents."
+  (append
+   (when (lispm-office--source-p lispm-office--source-buffer)
+     '((session . "Session")))
+   '((project . "Project") (all . "All projects"))
+   (when (eq lispm-office--scope 'project)
+     (list (cons 'working-only (if lispm-office--working-only "Show all active agents" "Working only"))))
+   (when (> (length (plist-get lispm-office--plan :rooms)) 1)
+     '((room . "Choose room…")))
+   (list (cons 'text (if lispm-office--text "Pictures" "Text view")))
+   '((refresh . "Refresh") (help . "Help"))))
+
+(defun lispm-office--view-command (command)
+  "Perform COMMAND chosen from the view menu."
+  (pcase command
+    ('session (lispm-office-session))
+    ('project (lispm-office-project))
+    ('all (lispm-office-overview))
+    ('working-only (lispm-office-toggle-working-only))
+    ('room (lispm-office-choose-room))
+    ('text (lispm-office-toggle-text))
+    ('refresh (lispm-office-refresh))
+    ('help (describe-mode))))
+
+(defun lispm-office--insert-view-menu ()
+  "Insert one shared LispM UI pop-up control for view navigation."
+  (let* ((owner (current-buffer))
+         (label (pcase lispm-office--scope
+                  ('session "Session") ('project "Project") (_ "All projects")))
+         (start (point)))
+    (lispm-ui-insert-popup-button
+     label (lispm-office--view-choices)
+     (lambda (command)
+       (when (buffer-live-p owner)
+         (with-current-buffer owner (lispm-office--view-command command))))
+     :current lispm-office--scope :help "View")
+    (add-text-properties start (point) (list 'lispm-ui-label label))
+    (insert "\n")))
+
+(defun lispm-office--insert-centered (text)
+  "Insert a short, centered empty-state caption TEXT."
+  (let* ((window (lispm-office--window))
+         (width (if window (window-body-width window) 80))
+         (caption (propertize text 'face 'shadow)))
+    (insert (if (display-graphic-p)
+                (propertize " " 'display
+                            `(space :align-to (- center (,(/ (string-pixel-width caption) 2)))))
+              (make-string (max 0 (/ (- width (string-width text)) 2)) ?\s))
+            caption "\n")))
 
 (defun lispm-office--draw ()
   "Draw cached data, without inspecting or querying an agent."
@@ -432,64 +534,7 @@ remains in scope; switching session returns to Session scope."
       (lispm-office--prune-flights)
       (setq lispm-office--dirty nil)
       (erase-buffer)
-      (insert (propertize (if lispm-office--demo "Office — Preview" "Agent Work") 'face 'bold))
-      (insert (format " · %s   %d conversations · %d rooms\n"
-                      (pcase lispm-office--scope ('session "Session") ('project "Project") (_ "All projects"))
-                      (length lispm-office--records)
-                      (length (plist-get lispm-office--plan :rooms))))
-      (when (lispm-office--source-p lispm-office--source-buffer)
-        (lispm-office--button "Session" #'lispm-office-session)
-        (insert " "))
-      (lispm-office--button "Project" #'lispm-office-project)
-      (insert " ") (lispm-office--button "All projects" #'lispm-office-overview)
-      (when (eq lispm-office--scope 'project)
-        (insert " ")
-        (lispm-office--button (if lispm-office--working-only "Show idle too" "Working only")
-                             #'lispm-office-toggle-working-only))
-      (insert "\n") (lispm-office--button "Fit" #'lispm-office-fit)
-      (unless (eq lispm-office--scope 'session)
-        (insert " ") (lispm-office--button "Room…" #'lispm-office-choose-room))
-      (insert " ") (lispm-office--button "−" #'lispm-office-zoom-out)
-      (insert " ") (lispm-office--button "+" #'lispm-office-zoom-in)
-      (insert " ") (lispm-office--button (if lispm-office--text "Pictures" "Text") #'lispm-office-toggle-text)
-      (insert " ") (lispm-office--button "Help" #'describe-mode)
-      (insert "\nWaiting: ")
-      (if-let* ((waiting (lispm-office--waiting)))
-          (progn
-            (dolist (record (seq-take waiting 6))
-              (let ((key (plist-get record :key)))
-                (when key
-                  (insert-text-button
-                   (truncate-string-to-width
-                    (replace-regexp-in-string "[[:cntrl:]]" " "
-                                              (substring-no-properties (or (plist-get record :name) "Agent")))
-                    18 nil nil "…")
-                   'follow-link t 'lispm-office-key key
-                   'action (lambda (_) (lispm-office--select key t)))
-                  (insert "  "))))
-            (when (> (length waiting) 6)
-              (insert (format "+%d more (n to cycle)" (- (length waiting) 6)))))
-        (insert "No agents need attention."))
-      (insert "\n")
-      (when (and lispm-office--project-root (eq lispm-office--scope 'project))
-        (insert (format "Directory: %s%s\n" (abbreviate-file-name lispm-office--project-root)
-                        (if lispm-office--working-only " · Working only" ""))))
-      (when (and (lispm-office--source-p lispm-office--source-buffer)
-                 (null lispm-office--source-key))
-        (insert "Current conversation: waiting for session identity.\n"))
-      (when-let* ((selected (seq-find (lambda (r) (equal lispm-office--selected (plist-get r :key)))
-                                    lispm-office--records)))
-        (insert (truncate-string-to-width
-                 (replace-regexp-in-string
-                  "[[:cntrl:]]" " "
-                  (format "Selected: %s · %s · %s" (plist-get selected :name)
-                          (or (plist-get (plist-get selected :status) :state) 'unknown)
-                          (or (plist-get (plist-get selected :status) :msg) "")))
-                 (if window (window-body-width window) 100) nil nil "…") "\n"))
-      (when-let* ((unknown (seq-filter (lambda (r) (null (plist-get r :key))) lispm-office--records)))
-        (insert "Starting: " (mapconcat (lambda (r) (substring-no-properties (or (plist-get r :name) "Agent"))) unknown ", ")
-                " (waiting for session ids)\n"))
-      (when lispm-office--demo (insert "Developer preview only. Agent actions are disabled.\n"))
+      (lispm-office--insert-view-menu)
       (setq lispm-office--floor-start (point))
       (setq lispm-office--chrome-height
             (if window
@@ -501,14 +546,12 @@ remains in scope; switching session returns to Session scope."
       (setq lispm-office--size (lispm-office--dimensions))
       (cond
        ((null (plist-get lispm-office--plan :nodes))
-        (cond ((and (eq lispm-office--scope 'project) lispm-office--working-only)
-               (insert "No agents currently working in this directory.\n"
-                       "Show idle too lists its other open conversations.\n"))
-              ((and (eq lispm-office--scope 'project) lispm-office--project-root)
-               (insert "No active agent sessions with a known identity in this directory.\n"
-                       "Start or resume a conversation to see it here.\n"))
-              (t (insert "No live conversations with a known session id yet.\n"
-                         "Start a LispM, Claude Code or Codex conversation, then return here.\n"))))
+        (lispm-office--insert-centered
+         (cond ((and (eq lispm-office--scope 'session) (null lispm-office--source-key))
+                "Session is starting…")
+               ((and (eq lispm-office--scope 'project) lispm-office--working-only)
+                "No agents working")
+               (t "No active agents"))))
        ((lispm-office--graphic-p)
         (let* ((now (float-time))
                (events (mapcar (lambda (event)
@@ -524,10 +567,6 @@ remains in scope; switching session returns to Session scope."
                                (list 'keymap lispm-office-mode-map
                                      'help-echo "Click a desk to inspect it; click a map room to enter."))))
        (t (lispm-office-render-text lispm-office--plan lispm-office--selected lispm-office--room)))
-      (unless (lispm-office--graphic-p)
-        (insert "\nArrows: desk   n: waiting   RET: inspect   w/m/c: tabs\n"
-                "o: chat   s: message   a/A: approve/all   d: deny\n"
-                "+/−: zoom   0: fit   S/P/h: Session/Project/All   g: refresh   q: return\n"))
       (goto-char (min old-point (point-max)))
       (when window (set-window-hscroll window 0)))))
 
@@ -538,9 +577,14 @@ remains in scope; switching session returns to Session scope."
                                                lispm-office--room lispm-office--flights)
            (and (>= (plist-get (lispm-office-render-projection
                                 (lispm-office--scene-plan) lispm-office--scale lispm-office--room) :scale) 0.45)
-                (seq-some (lambda (record)
-                            (eq (plist-get (plist-get record :status) :state) 'working))
-                          (lispm-office--visible-nodes))))))
+                (let* ((nodes (lispm-office--visible-nodes))
+                       (keys (mapcar (lambda (node) (plist-get node :key)) nodes)))
+                  (seq-some
+                   (lambda (record)
+                     (or (eq (plist-get (plist-get record :status) :state) 'working)
+                         (seq-some (lambda (key) (member key keys))
+                                   (plist-get record :waits-on))))
+                   nodes))))))
 
 (defun lispm-office--sync-timer ()
   "Start or cancel the animation timer according to visible work."
@@ -576,7 +620,7 @@ remains in scope; switching session returns to Session scope."
     (with-current-buffer buffer
       (lispm-office--prune-flights)
       (if (lispm-office--graphic-p)
-          (progn (setq lispm-office--phase (- 1 lispm-office--phase))
+          (progn (setq lispm-office--phase (mod (1+ lispm-office--phase) 32))
                  (lispm-office--draw))
         (setq lispm-office--flights nil))
       (lispm-office--sync-timer))))
@@ -911,7 +955,7 @@ remains in scope; switching session returns to Session scope."
   (lispm-office-toggle-text :key "t" :label "Text View" :style toggle :selected lispm-office--text)
   (lispm-office-compact :label "Compact Saved Seats…")
   (lispm-office-refresh :key "g" :label "Refresh")
-  (lispm-office-quit :key "q" :label "Return to Conversation"))
+  (lispm-office-quit :key "q" :label "Return to Previous View"))
 
 (defun lispm-office--observe ()
   "Install observers shared by the open Office buffers."
@@ -962,13 +1006,17 @@ The source buffer and its input remain intact."
       (lispm-office--restore-window window)
       (set-window-parameter
        window 'lispm-office-source
-       (list :view buffer :buffer source
+       (list :view buffer :view-name (buffer-name buffer) :buffer source
              :point (with-current-buffer source (copy-marker (window-point window)))
              :start (with-current-buffer source (copy-marker (window-start window)))
+             :point-position (window-point window) :start-position (window-start window)
              :hscroll (window-hscroll window) :vscroll (window-vscroll window t)))
       (set-window-buffer window buffer))
     (select-window window)
-    (with-current-buffer buffer (lispm-office-refresh))
+    (with-current-buffer buffer
+      (setq-local header-line-format
+                  (when lispm-office--source-buffer '((:eval (lispm-office--view-switcher)))))
+      (lispm-office-refresh))
     buffer))
 
 ;;;###autoload
@@ -976,8 +1024,8 @@ The source buffer and its input remain intact."
   "Show all active agent sessions in DIRECTORY in the host's main window.
 Called interactively, use the current working directory.  This project
 view includes idle agents and stays pinned when other conversations receive
-focus.  The previous
-main-window buffer and its draft can be restored with Conversation or q."
+focus.  It has no Conversation tab; q restores the previous main-window
+buffer and its draft."
   (interactive (list default-directory))
   (unless (and (stringp directory) (not (string-empty-p directory)))
     (user-error "A project directory is required"))

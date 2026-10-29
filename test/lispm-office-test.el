@@ -295,26 +295,32 @@ The actual SVG image implementation is used."
 (ert-deftest lispm-office-message-events-animate-once-and-do-not-invent-mail ()
   (lispm-office-test--isolated
     (let ((office (lispm-office))
+          (now (float-time))
+          (clock (symbol-function 'float-time))
           (event '(:events ((:sequence 1 :type message-queued :from "Ada" :to "Bob")
                             (:sequence 2 :type state-changed :from "Ada" :to "Bob")
                             (:sequence 3 :type message-delivered :from "Bob" :to "Ada")))))
       (with-current-buffer office
         (setq lispm-office--fit nil lispm-office--scale 1.0)
         (lispm-office-test--graphical
-          (lispm-office--ingest records event)
-          (should (= (length lispm-office--flights) 2))
-          (should (equal (sort (mapcar (lambda (flight) (plist-get flight :sequence)) lispm-office--flights) #'<)
-                         '(1 3)))
-          (lispm-office--ingest records event)
-          (should (= (length lispm-office--flights) 2))
-          (let ((reads roster-reads))
+          ;; Rendering may take longer than a flight's lifetime under host load.
+          ;; Advance the event clock explicitly while preserving time conversion.
+          (cl-letf (((symbol-function 'float-time)
+                     (lambda (&optional time) (if time (funcall clock time) now))))
+            (lispm-office--ingest records event)
+            (should (= (length lispm-office--flights) 2))
+            (should (equal (sort (mapcar (lambda (flight) (plist-get flight :sequence)) lispm-office--flights) #'<)
+                           '(1 3)))
+            (lispm-office--ingest records event)
+            (should (= (length lispm-office--flights) 2))
+            (let ((reads roster-reads))
+              (lispm-office--tick office)
+              (should (= reads roster-reads))
+              (should-not detail-reads))
+            (setq now (+ now 2))
             (lispm-office--tick office)
-            (should (= reads roster-reads))
-            (should-not detail-reads))
-          (dolist (flight lispm-office--flights) (setf (plist-get flight :started) (- (float-time) 2)))
-          (lispm-office--tick office)
-          (should-not lispm-office--flights)
-          (should-not lispm-office--timer))))))
+            (should-not lispm-office--flights)
+            (should-not lispm-office--timer)))))))
 
 (ert-deftest lispm-office-corrupt-seats-retry-does-not-overwrite ()
   (lispm-office-test--isolated
@@ -362,7 +368,7 @@ The actual SVG image implementation is used."
         (should (= attempts 2))
         (should (= (length (plist-get (lispm-office-layout-read lispm-office-seat-file) :seats)) 3))))))
 
-(ert-deftest lispm-office-text-selection-moves-point-past-waiting-header ()
+(ert-deftest lispm-office-text-selection-moves-point-past-view-menu ()
   (lispm-office-test--isolated
     (setf (plist-get (car records) :status) '(:state blocked :kind question)
           (plist-get (cadr records) :status) '(:state blocked :kind permission))
@@ -378,12 +384,14 @@ The actual SVG image implementation is used."
         (should (string-match-p "> Bob" (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
         (should (= (window-point (get-buffer-window office)) (point))))
       (with-current-buffer office
-        (save-excursion
-          (goto-char (point-min))
-          (search-forward "Waiting: ")
-          (search-forward "Bob")
-          (should (< (point) lispm-office--floor-start))
-          (should (equal (get-text-property (1- (point)) 'lispm-office-key) '(codex "b"))))))))
+        (should-not (text-property-not-all (point-min) lispm-office--floor-start
+                                          'lispm-office-key nil))
+        (should-not (string-match-p "Waiting:"
+                                    (buffer-substring-no-properties
+                                     (point-min) lispm-office--floor-start)))
+        (lispm-office-next-waiting)
+        (should (>= (point) lispm-office--floor-start))
+        (should (equal (get-text-property (point) 'lispm-office-key) '(claude "a")))))))
 
 (provide 'lispm-office-test)
 ;;; lispm-office-test.el ends here

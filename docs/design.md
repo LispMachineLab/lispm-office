@@ -7,9 +7,10 @@ supplies drawing and controls; LispM Agent owns conversations, data and actions.
 
 ## Plugin and current work
 
-Load `lispm-office-plugin` and enable `lispm-office-plugin-mode` to add a visible
-Conversation / Work toggle to Agent chat and terminal headers. The controls use
-LispM UI's bevel buttons and mark the active view as pressed. The local `C-c O`
+Load `lispm-office-plugin` and enable `lispm-office-plugin-mode` to add visible
+Conversation / Work tabs to Agent chat and terminal headers. Desktop supplies
+its native Mac OS 9 pane tabs; without Desktop the same controls use Emacs tab
+faces. The tabs are adjacent, and the active tab is in front. The local `C-c O`
 binding performs the same toggle. Existing header content is preserved and
 restored when the plugin is disabled.
 
@@ -24,7 +25,9 @@ calls the optional `lispm-desktop-agent-list-open-project-functions` hook; Offic
 registers `lispm-office-open-project` while enabled and removes it on disable.
 Desktop falls back to its native directory Agent list without Office; no file
 browser is involved. Desktop is not a required dependency. The entrypoint also
-works directly with the current working directory, without a conversation or a Desktop sidebar.
+works directly with the current working directory, without a conversation or a
+Desktop sidebar. This entry has no Conversation tab and never infers a conversation
+from the first desk. `q` restores only the original main-pane buffer.
 
 The directory is explicit and never inferred from the previously selected agent.
 Folder views initially include all active sessions, including idle and done
@@ -42,7 +45,11 @@ pointers are followed only downward from the original session: reaching a peer
 through an active request does not bring that peer's unrelated children into the
 group. Traversal is cycle-safe and uses only the cached roster.
 
-The Session, Project and All projects controls explicitly select scope. Project
+A shared LispM UI pop-up menu explicitly selects Session, Project or All projects.
+The same compact menu contains the optional Working only filter, room selection,
+text view, refresh and help. There are no inline counts, waiting strip, selected
+agent summary, directory diagnostics or zoom buttons; empty-state captions are
+short and centered. The floor fits the available area by default. Project
 shows the source session's project; All projects shows the whole live roster.
 Session returns to the source and its collaborators. A source without a known
 identity has an empty pending Session view until its key arrives, without falling
@@ -65,7 +72,12 @@ conversation. Entry from outside a conversation uses
 
 Leaving Work closes its Inspector and releases its subscriptions. Disabling or
 unloading the plugin restores source conversations, headers and local bindings,
-and removes its observers. It never stops or closes source conversations.
+and releases its roster observers. Inspector panes carry ownership markers;
+closing them removes the pane without restoring an obsolete buffer from window
+history. Workspace cleanup removes saved panes belonging to closed Inspectors
+and restores the original source of a closed Work view. Return contexts stay in
+this Emacs session's window configurations, without being serialized to disk.
+Source conversations keep running.
 
 ## Identity and layout
 
@@ -73,8 +85,8 @@ The stable identity is `(KIND SESSION-ID)`. The full cheap roster is retained fo
 global seat reservations; visible records and geometry are derived separately
 from the chosen scope. Characters without an open conversation are not included.
 Project and All projects group rooms by project root, including Home for the home
-directory. An unidentified terminal can appear in those explicit overviews'
-Starting line; Session scope remains empty until its source identity is known.
+directory. An unidentified terminal remains pending without a desk until its identity is
+known; Session scope stays empty until its source identity is known.
 
 The persistent seating model uses 450 × 454 rooms, each with four pods of four
 desks. New children prefer their parent's pod, then its room. Full projects gain
@@ -87,7 +99,9 @@ Session scope places its collaborators in one transient display room, even when
 their actual project roots differ. It preserves each record's identity and root
 and never rewrites saved seats. Fit derives a responsive scene from that room or
 the selected project room and the window's measured available width and height.
-Desks reflow to fill the pane; avatars and text scale uniformly. When a pane is
+Compact desk pods reflow within the pane, leaving shared aisles and a coffee area
+beside or below them; spare space enlarges those shared areas. Avatars and text
+scale uniformly. When a pane is
 too small for readable desks, it scrolls instead of collapsing the focused room
 into an inaccessible map tile.
 
@@ -102,7 +116,7 @@ for a manual refresh or close to retry.
 no roster observer. Office subscribes to `lispm-agents-roster-change-functions`
 while a live Work view is open. Leaving the last Work view removes that observer.
 Preview buffers do not subscribe.
-Counts, waiting strip, selection, actions and animation use only visible records.
+Selection, actions, inspection and animation use only visible records.
 The waiting order comes from `lispm-agents-waiting-buffers`, filtered to scope.
 Source changes, roster refreshes and settled requests recompute that scope
 without fetching work details. Cached message animations are discarded when
@@ -125,12 +139,19 @@ explicitly discloses that queued inputs are cleared.
 ## Rendering and resource use
 
 SVG, hit testing, keyboard movement and animation share the displayed scene and
-projection. Scope controls and drawing controls occupy separate toolbar rows;
-their actual pixel height is measured before fitting the remaining buffer area.
+projection. A single compact view menu occupies one toolbar row; its actual
+pixel height is measured before fitting the remaining buffer area. Conversation
+tabs live in the header; a directory view omits that header.
 Desk view starts at scale 0.72, Floor
 at 0.45, and Map below that; image dimensions are capped at 4096 pixels and the
 effective scale controls both rendering and interaction. A map selection enters
 its room. Text mode uses the same records, stable identity and commands.
+
+Eight room interiors combine wood, parquet, tile, tatami or carpet patterns with
+wallpaper, dividing walls, doors and furnishings. A shuffled deck assigns each
+room a style retained for the Emacs session, independently of the interface's
+accent color. Rooms include coffee counters, plants and shelves where their
+layout provides space. Room labels are centered signs within the wallpaper.
 
 Workers use 16 distinct 16 × 16 pixel sprites with varied hairstyles,
 accessories, skin, hair and clothing colors. Each newly seen stable session key
@@ -141,14 +162,26 @@ the image cache and is not saved to disk, so restarting Emacs randomizes the
 assignments again. At Desk zoom, a configured avatar takes precedence over the
 sprite's head.
 
+Roster state selects each worker's pose: working types, idle holds coffee, and
+blocked or error raises a hand. An explicit `:waits-on` link to a visible peer
+can produce a walking visitor when the layout supplies a safe route. The worker
+leaves its chair, follows the aisles and stands beside the peer, keeping both
+desks and their labels clear. This is a representation of the existing wait
+relationship; shared directories alone do not create visits. The visible worker
+retains its source agent's identity for inspection.
+
 The floor never reads transcripts. Cached avatar data avoids filesystem reads
 on animation ticks. There is no roster polling or global post-command hook.
-One 250 ms animation timer runs only for visible working desks or actual message
-events with visible endpoints. Map, text, hidden and idle views stop it. Events
+One 120 ms animation timer runs only for visible working desks, explicit waits
+between visible peers, or actual message events with visible endpoints. Its
+32-phase cycle supports typing and walking poses without reading new agent data;
+elapsed time moves visitors along their route. Idle poses alone start no timer.
+Map, text and hidden views stop animation. Events
 are sequence-deduplicated, expire after one second and have a bounded queue.
 The palette is initialized through LispM UI's public API. Palette changes
-invalidate drawing resources without changing portrait assignments. The room and
-controls use LispM UI's palette; sprite colors distinguish individual workers.
+invalidate drawing resources without changing portrait or interior assignments.
+Controls use LispM UI's palette; room interiors and sprite colors keep their
+individual palettes.
 
 ## Dependency and distribution
 

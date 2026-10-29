@@ -113,9 +113,8 @@ No model requests, process launches, details, or user files are accessed."
         (should lispm-office--room)
         (should (= (length lispm-office--all-records) (length records)))
         (should (= (length (plist-get lispm-office--state :seats)) (length records)))
-        (should (cl-loop for position from (point-min) below (point-max)
-                         thereis (equal (get-text-property position 'lispm-ui-label)
-                                        "Working only")))
+        (should (equal (cdr (assq 'working-only (lispm-office--view-choices)))
+                       "Working only"))
         (should-not (string-match-p "waiting for session identity" (buffer-string))))
       (should (= roster-reads 1)))))
 
@@ -242,7 +241,7 @@ No model requests, process launches, details, or user files are accessed."
         (should (equal lispm-office--project-root empty))
         (should-not lispm-office--records)
         (should-not lispm-office--selected)
-        (should (string-match-p "No active agent sessions with a known identity in this directory"
+        (should (string-match-p "No active agents"
                                 (buffer-string)))
         (should-not (string-match-p "No agents currently working" (buffer-string)))
         (should-error (lispm-office--key) :type 'user-error)
@@ -250,7 +249,7 @@ No model requests, process launches, details, or user files are accessed."
         (lispm-office-toggle-working-only)
         (should-not lispm-office--records)
         (should-not lispm-office--selected)
-        (should (string-match-p "No agents currently working in this directory"
+        (should (string-match-p "No agents working"
                                 (buffer-string)))
         (should (equal lispm-office--project-root empty))))))
 

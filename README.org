@@ -7,7 +7,8 @@ in graphical Emacs and on a text terminal.
 
 * Using it
 
-Enable the plugin, then click =Conversation= or =Work= in the agent's header.
+Enable the plugin, then click the =Conversation= or =Work= tab in the agent's header.
+Desktop draws these with its native Mac OS 9 tab control.
 =C-c O= performs the same toggle in the same window. Returning to Conversation
 restores the source buffer, draft, point and scroll position; the agent keeps
 running throughout. =q= in Work also returns to the conversation.
@@ -15,16 +16,19 @@ running throughout. =q= in Work also returns to the conversation.
 In the Desktop Agents sidebar, click a project's folder or name to open that
 directory's Work view in the main pane. Only the disclosure triangle folds or
 unfolds the list. This view includes all active sessions, including idle agents.
-=Working only= optionally narrows it to ongoing work, attention or queued input.
-It stays on the selected directory when another conversation gains focus.
+The compact view menu offers =Working only= to narrow it to ongoing work,
+attention or queued input. It stays on the selected directory when another
+conversation gains focus. A directory view has no Conversation tab; =q= restores
+the previous main-pane view without choosing an agent.
 =M-x lispm-office-open-project= opens the current working directory directly.
 Without Office, Desktop shows its native directory Agent list instead.
 
 Work opened from a conversation starts in =Session= scope: the current agent,
 its descendants, and agents connected by active requests or waits. Sharing a
 project directory alone never adds another conversation. Waiting for a new
-session identity shows an empty pending view. =Project= explicitly shows the source conversation's project;
-=All projects= shows the whole roster; =Session= returns to the current task.
+session identity shows an empty pending view. The view menu offers =Project=
+for the source conversation's project, =All projects= for the whole roster, and
+=Session= to return to the current task.
 
 Session scope follows child relationships downward from the current agent, then
 active wait links in either direction and shared request ids. Parent pointers
@@ -34,9 +38,14 @@ desks by project; these display choices never alter saved global seats.
 
 Click a desk or press =RET= to open its optional Inspector side window with Work,
 Mailbox and Character tabs.
-In Fit mode, the room fills the available buffer area and its desks reflow when
+The room fills the available buffer area by default and its desks reflow when
 the window changes size. Avatars and text keep their proportions; saved seat
-identities stay unchanged. =Help= lists the view's keyboard commands.
+identities stay unchanged. The view menu also contains room selection, text view,
+refresh and help. The floor has no status-summary rows or zoom buttons.
+
+Eight randomized room interiors combine patterned floors, wallpaper, dividing
+walls and doors. Compact desk groups leave aisles and space for coffee, plants
+and shelves. Each room keeps its interior for the current Emacs session.
 
 Workers use 16 pixel portraits with different hairstyles, accessories and colors.
 New session identities receive randomized portraits from a shuffled set, so the
@@ -45,13 +54,18 @@ scope changes and theme changes. Assignments last for the Emacs session and are
 randomized again after restarting Emacs. At detailed desk zoom, a configured
 avatar replaces the pixel portrait's head.
 
+Working agents type, idle agents hold coffee, and agents needing attention raise
+a hand. An explicit wait on a visible peer can make the worker walk along a safe
+aisle and stand beside that peer. This movement represents an existing wait
+relationship in the roster.
+
 Open Chat navigates to the selected conversation. If you select another agent
 in a second window while a conversation's Work view is visible, it follows that
 agent in Session scope; switching between the same session's chat and transcript
 preserves your scope. Set =lispm-office-follow-current-agent= to =nil= to keep your desk selection.
 
-The count, waiting strip, inspector and actions use the selected scope. =n= leads
-to scoped agents that need you. Rooms grow automatically, with a map overview
+The inspector and actions use the selected scope. =n= leads to scoped agents
+that need you. Rooms grow automatically, with a map overview
 when there are many agents. Seats survive restarts; only
 =Compact Saved Seats…= removes empty reservations.
 
@@ -69,14 +83,16 @@ when there are many agents. Seats survive restarts; only
 | S / P / h       | Session / Project / All projects            |
 | r               | Choose a room within the current scope      |
 | t               | Toggle text view                            |
-| g / q           | Refresh / return to the conversation        |
+| g / q           | Refresh / return to the previous view       |
 
 Approve All is limited to one selected agent and its current turn. A change to
 the displayed permissions cancels the preview. Terminal agents expose only the
 actions supported by their provider; open their chat for questions or approvals.
 Leaving Work releases its inspector and subscriptions. Disabling
 =lispm-office-plugin-mode= restores conversations and their original headers,
-and removes the plugin's local bindings and observers.
+and removes the plugin's local bindings and roster observers. Closing an Inspector
+removes its pane; returning to a saved workspace also clears obsolete Inspector
+panes and restores the source of a closed Work view.
 
 * Installing
 
@@ -99,7 +115,8 @@ Seats are kept in =office-seats.eld= under =lispm-directory=; set
 =lispm-office-seat-file= to use another file. Set =lispm-office-animate= to =nil= to
 disable animation. Enabling the plugin does not subscribe to the roster until a
 Work view opens. The view does not poll agents and stops its timer while hidden
-or idle. It initializes its palette through LispM UI's public API.
+or when no visible animation is needed. It initializes its palette through LispM
+UI's public API.
 
 * Development
 

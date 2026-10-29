@@ -36,6 +36,7 @@
 (declare-function lispm-switch "lispm" (agent))
 (declare-function lispm-agent-display-buffer "lispm" (agent))
 (declare-function lispm-office--prepare-navigation "lispm-office" (owner))
+(declare-function lispm-office-cleanup-windows "lispm-office" (&rest _))
 (declare-function lispm-waiting-calls "lispm-runtime" (agent))
 (declare-function lispm-asked "lispm-runtime" (call))
 (declare-function lispm-approve-for "lispm-runtime" (agent &optional id))
@@ -64,6 +65,74 @@
   "The current inspector tab: work, mailbox or character.")
 (defvar-local lispm-office-inspect--dirty nil
   "Non-nil when an unseen inspector needs fresh details when shown.")
+(defvar lispm-office-inspect--cleaning-windows nil
+  "Non-nil while transient Inspector windows are being removed.")
+(defvar tab-bar-tab-post-select-functions)
+
+(defun lispm-office-inspect--placeholder-p (buffer)
+  "Whether BUFFER is Emacs's notice for a killed Office Inspector.
+Restrict legacy cleanup to the generated name and notice in a special
+buffer; other missing files, conversations and user buffers are untouched."
+  (and (buffer-live-p buffer)
+       (string-match-p
+        "\\` \\*Old buffer \\*LispM Office Inspector\\*\\(?:<[0-9]+>\\)?\\*\\(?:<[0-9]+>\\)?\\'"
+        (buffer-name buffer))
+       (with-current-buffer buffer
+         (and (not buffer-file-name) (derived-mode-p 'special-mode)
+              (string-match-p
+               "\\`This window displayed the buffer .*\\*LispM Office Inspector\\*"
+               (buffer-substring-no-properties
+                (point-min) (min (point-max) (+ (point-min) 256))))))))
+
+(defun lispm-office-inspect--remove-window (window &optional owner)
+  "Remove the Inspector WINDOW, preserving a last ordinary window.
+OWNER is a live Office to display if WINDOW cannot be deleted.  Never
+consult `quit-restore', which may refer to an obsolete placeholder."
+  (set-window-parameter window 'lispm-office-inspector nil)
+  (set-window-parameter window 'quit-restore nil)
+  (set-window-parameter window 'quit-restore-prev nil)
+  (if (and (window-parameter window 'window-side) (window-parent window))
+      (delete-window window)
+    (let ((replacement (if (buffer-live-p owner) owner
+                         (other-buffer (window-buffer window) t))))
+      (set-window-dedicated-p window nil)
+      (set-window-buffer window replacement))))
+
+(defun lispm-office-inspect--close-windows (buffer)
+  "Remove windows still displaying BUFFER, not panes repurposed by users."
+  (let ((owner (buffer-local-value 'lispm-office-inspect--owner buffer)))
+    (save-current-buffer
+      (dolist (window (get-buffer-window-list buffer nil t))
+        (lispm-office-inspect--remove-window window owner)))))
+
+(defun lispm-office-inspect-cleanup-windows (&rest _)
+  "Remove obsolete Inspector notices after a window or tab restoration.
+This is safe as a window-state or tab-selection callback.  Writable
+ownership markers survive saved layouts; narrowly recognized notices
+also repair layouts saved before ownership markers were introduced."
+  (unless lispm-office-inspect--cleaning-windows
+    (let ((lispm-office-inspect--cleaning-windows t) placeholders)
+      (save-current-buffer
+        (save-selected-window
+          (dolist (frame (frame-list))
+            (dolist (window (window-list frame 'nomini))
+              (let* ((buffer (window-buffer window))
+                     (owned (window-parameter window 'lispm-office-inspector)))
+                (cond
+                 ((and (or owned (window-parameter window 'window-side))
+                       (lispm-office-inspect--placeholder-p buffer))
+                  (push buffer placeholders)
+                  (lispm-office-inspect--remove-window window))
+                 ((and owned
+                       (not (with-current-buffer buffer
+                              (derived-mode-p 'lispm-office-inspect-mode))))
+                  ;; A user may deliberately reuse the pane for another buffer.
+                  (set-window-parameter window 'lispm-office-inspector nil))))))))
+      (dolist (buffer (delete-dups placeholders))
+        (when (and (buffer-live-p buffer) (not (get-buffer-window buffer t)))
+          (kill-buffer buffer)))
+      (when (fboundp 'lispm-office-cleanup-windows)
+        (lispm-office-cleanup-windows)))))
 
 (defun lispm-office-inspect--require ()
   "Ensure the live roster API is installed."
@@ -493,7 +562,8 @@ a new call that happens to reuse the old call's id."
   (lispm-office-inspect--close-buffer (current-buffer)))
 
 (defun lispm-office-inspect--forget ()
-  "Remove this inspector from its owner registry when it is killed."
+  "Remove this inspector's panes and registry entry when it is killed."
+  (lispm-office-inspect--close-windows (current-buffer))
   (setq lispm-office-inspect--buffers
         (cl-delete (current-buffer) lispm-office-inspect--buffers :key #'cdr :test #'eq)))
 
@@ -530,15 +600,18 @@ buffer.  An existing inspector for this owner keeps its selected tab."
         (unless (memq tab '(work mailbox character)) (user-error "Unknown inspector tab"))
         (setq lispm-office-inspect--tab tab))
       (lispm-office-inspect--draw))
-    (if-let* ((window (seq-find (lambda (window) (window-parameter window 'window-side))
-                               (get-buffer-window-list owner nil (selected-frame)))))
-        (select-window
-         (display-buffer-in-side-window
-          buffer `((side . ,(window-parameter window 'window-side))
-                   (slot . ,(1+ (or (window-parameter window 'window-slot) 0)))
-                   (window-width . ,(window-total-width window)))))
-      (select-window
-       (display-buffer-in-side-window buffer '((side . right) (slot . 0)))))
+    (let* ((owner-window
+            (seq-find (lambda (window) (window-parameter window 'window-side))
+                      (get-buffer-window-list owner nil (selected-frame))))
+           (window
+            (display-buffer-in-side-window
+             buffer (if owner-window
+                        `((side . ,(window-parameter owner-window 'window-side))
+                          (slot . ,(1+ (or (window-parameter owner-window 'window-slot) 0)))
+                          (window-width . ,(window-total-width owner-window)))
+                      '((side . right) (slot . 0))))))
+      (set-window-parameter window 'lispm-office-inspector (buffer-name buffer))
+      (select-window window))
     buffer))
 
 (defun lispm-office-inspect-follow (owner key)
@@ -589,9 +662,25 @@ The Office calls this from its window visibility callback."
 (defun lispm-office-inspect--close-buffer (buffer)
   "Close BUFFER and its windows without changing source conversations."
   (when (buffer-live-p buffer)
-    (dolist (window (get-buffer-window-list buffer nil t))
-      (quit-window nil window))
-    (kill-buffer buffer)))
+    (let ((was-current (eq (current-buffer) buffer)))
+      (lispm-office-inspect--close-windows buffer)
+      (kill-buffer buffer)
+      (when was-current
+        (set-buffer (window-buffer (selected-window)))))))
+
+(defun lispm-office-inspect-unload-function ()
+  "Release Inspector windows and restoration hooks before unloading."
+  (dolist (entry (copy-sequence lispm-office-inspect--buffers))
+    (lispm-office-inspect--close-buffer (cdr entry)))
+  (remove-hook 'window-state-change-functions #'lispm-office-inspect-cleanup-windows)
+  (remove-hook 'tab-bar-tab-post-select-functions #'lispm-office-inspect-cleanup-windows)
+  (setq window-persistent-parameters
+        (assq-delete-all 'lispm-office-inspector window-persistent-parameters))
+  nil)
+
+(add-to-list 'window-persistent-parameters '(lispm-office-inspector . writable))
+(add-hook 'window-state-change-functions #'lispm-office-inspect-cleanup-windows)
+(add-hook 'tab-bar-tab-post-select-functions #'lispm-office-inspect-cleanup-windows)
 
 (provide 'lispm-office-inspect)
 ;;; lispm-office-inspect.el ends here

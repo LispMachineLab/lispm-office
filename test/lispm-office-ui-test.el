@@ -1,0 +1,147 @@
+;;; lispm-office-ui-test.el --- Native view navigation -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'cl-lib)
+(require 'tab-bar)
+(require 'lispm-office-project-test)
+
+(ert-deftest lispm-office-ui-directory-has-no-conversation-tab-or-session-choice ()
+  (lispm-office-project-test--isolated
+    (with-current-buffer source (insert "Draft stays here") (goto-char 7))
+    (let ((office (lispm-office-open-project alpha)))
+      (with-current-buffer office
+        (should-not header-line-format)
+        (should (equal (lispm-office--view-switcher) ""))
+        (should-not (assq 'session (lispm-office--view-choices)))
+        (should-not lispm-office--source-buffer)
+        (lispm-office-overview)
+        (should-not header-line-format)
+        (should (equal (lispm-office--view-switcher) ""))
+        (lispm-office-return))
+      (should (eq (window-buffer conversation-window) source))
+      (should (= (window-point conversation-window) 7))
+      (should (equal (with-current-buffer source (buffer-string)) "Draft stays here")))))
+
+(ert-deftest lispm-office-ui-view-popup-navigates-and-filters-without-status-rows ()
+  (lispm-office-project-test--isolated
+    (let ((office (lispm-office)) (choice 'project) seen)
+      (with-current-buffer office
+        (let ((lispm-ui-choose-function
+               (lambda (choices &rest _)
+                 (setq seen choices)
+                 (should (assq choice choices))
+                 (list choice))))
+          (button-activate (button-at (point-min)))
+          (should (eq lispm-office--scope 'project))
+          (should (assq 'session seen))
+          (should (member "idle" (lispm-office-project-test--keys office)))
+          (setq choice 'working-only)
+          (button-activate (button-at (point-min)))
+          (should lispm-office--working-only)
+          (should-not (member "idle" (lispm-office-project-test--keys office)))
+          (setq choice 'all)
+          (button-activate (button-at (point-min)))
+          (should (eq lispm-office--scope 'all))
+          (should (member "other" (lispm-office-project-test--keys office)))
+          (setq choice 'session)
+          (button-activate (button-at (point-min)))
+          (should (eq lispm-office--scope 'session)))
+        (let ((chrome (buffer-substring-no-properties (point-min) lispm-office--floor-start)))
+          (should (= (cl-count ?\n chrome) 1))
+          (dolist (text '("Agent Work" "conversations" "Waiting:" "Selected:" "Starting:"
+                          "Directory:" "Fit" "+" "−"))
+            (should-not (string-match-p (regexp-quote text) chrome))))
+        (should lispm-office--fit)))))
+
+(ert-deftest lispm-office-ui-conversation-switcher-uses-host-native-tabs ()
+  (lispm-office-project-test--isolated
+    (let (seen)
+      (cl-letf (((symbol-function 'lispm-desktop-platinum-tabs-width)
+                 (lambda (labels &optional _) (should (equal labels '("Conversation" "Work"))) 220))
+                ((symbol-function 'lispm-desktop-platinum-tabs)
+                 (lambda (tabs _width &optional _face)
+                   (setq seen tabs)
+                   (mapconcat (pcase-lambda (`(,label ,_ . ,properties))
+                                (apply #'propertize label properties)) tabs ""))))
+        (let ((switcher (lispm-office--view-switcher)))
+          (should (equal (substring-no-properties switcher) "ConversationWork"))
+          (should (nth 1 (car seen)))
+          (should-not (nth 1 (cadr seen)))
+          (should (commandp (lookup-key (get-text-property 12 'local-map switcher)
+                                        [header-line mouse-1]))))
+        (let ((office (lispm-office)))
+          (with-current-buffer office
+            (lispm-office--view-switcher)
+            (should-not (nth 1 (car seen)))
+            (should (nth 1 (cadr seen)))))))))
+
+(ert-deftest lispm-office-ui-unknown-session-is-centered-and-never-another-agent ()
+  (lispm-office-project-test--isolated
+    (cl-letf (((symbol-function 'lispm-office--context-key) (lambda (_) nil)))
+      (with-current-buffer (lispm-office)
+        (should-not lispm-office--records)
+        (should-not lispm-office--selected)
+        (goto-char lispm-office--floor-start)
+        (should (looking-at " +Session is starting…"))
+        (should-not (string-match-p "Starting:" (buffer-string)))))))
+
+(ert-deftest lispm-office-ui-animation-advances-cycle-and-includes-visible-waits ()
+  (with-temp-buffer
+    (lispm-office-mode)
+    (let* ((lispm-office-animate t)
+           (lispm-office--phase 31)
+           (a '(:key (lispm "a") :status (:state blocked) :waits-on ((lispm "b"))))
+           (b '(:key (lispm "b") :status (:state idle)))
+           (nodes (list a b)))
+      (cl-letf (((symbol-function 'lispm-office--graphic-p) (lambda () t))
+                ((symbol-function 'lispm-office--visible-nodes) (lambda () nodes))
+                ((symbol-function 'lispm-office-render-visible-events) (lambda (&rest _) nil))
+                ((symbol-function 'lispm-office-render-projection) (lambda (&rest _) '(:scale 1.0)))
+                ((symbol-function 'lispm-office--draw) #'ignore)
+                ((symbol-function 'lispm-office--sync-timer) #'ignore))
+        (should (lispm-office--animated-p))
+        (setq nodes (list a))
+        (should-not (lispm-office--animated-p))
+        (setq nodes (list b))
+        (should-not (lispm-office--animated-p))
+        (lispm-office--tick (current-buffer))
+        (should (= lispm-office--phase 0))
+        (lispm-office--tick (current-buffer))
+        (should (= lispm-office--phase 1))))))
+
+(ert-deftest lispm-office-ui-inactive-workspace-restores-source-after-work-closes ()
+  (lispm-office-project-test--isolated
+    (let ((tabs (frame-parameter nil 'tabs))
+          (tab-bar-tab-post-select-functions '(lispm-office-inspect-cleanup-windows))
+          (tab-bar-new-tab-choice nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer source (insert "Original conversation draft") (goto-char 10))
+            (let ((office (lispm-office))
+                  (index (1+ (tab-bar--current-tab-index))))
+              (tab-bar-new-tab)
+              (switch-to-buffer ordinary)
+              (kill-buffer office)
+              (tab-bar-select-tab index)
+              (should (eq (window-buffer) source))
+              (should (= (window-point) 10))
+              (should-not (window-parameter nil 'lispm-office-source))
+              (should-not (get-buffer " *Old buffer *LispM Office**"))))
+        (set-frame-parameter nil 'tabs tabs)))))
+
+(ert-deftest lispm-office-ui-cleanup-preserves-unrelated-restored-windows ()
+  (save-window-excursion
+    (let ((buffer (generate-new-buffer " *Old buffer unrelated*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (insert "This window displayed the buffer ‘unrelated’.\n")
+              (special-mode))
+            (switch-to-buffer buffer)
+            (lispm-office-cleanup-windows)
+            (should (eq (window-buffer) buffer))
+            (should (buffer-live-p buffer)))
+        (kill-buffer buffer)))))
+
+(provide 'lispm-office-ui-test)
+;;; lispm-office-ui-test.el ends here

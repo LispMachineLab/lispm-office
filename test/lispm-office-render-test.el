@@ -75,7 +75,7 @@
                    plan nil 1 0 nil '((:type message-queued :from "Nobody" :to "Claude"))))
          (state (lispm-office-render-svg
                  plan nil 1 0 nil '((:type state-changed :from "Ada" :to "Claude")))))
-    (should (= (length (dom-by-class ordinary "office-wait")) 1))
+    (should-not (dom-by-class ordinary "office-wait"))
     (should-not (dom-by-class ordinary "office-envelope"))
     (should (= (length (dom-by-class message "office-envelope")) 1))
     (should-not (dom-by-class unknown "office-envelope"))
@@ -272,6 +272,12 @@
     (should (= (length (dom-by-class svg "office-desk")) 3))
     (should (apply #'= (mapcar (lambda (node) (plist-get node :y)) nodes)))
     (should (apply #'< (mapcar (lambda (node) (plist-get node :x)) nodes)))
+    ;; Spare width belongs to the office floor and service area, not to
+    ;; oversized cells separating people who share a desk bank.
+    (should (= (- (plist-get (cadr nodes) :x) (plist-get (car nodes) :x)) 98))
+    (should (plist-get room :pods))
+    (should (plist-get room :aisles))
+    (should (plist-get room :fixtures))
     (dolist (node nodes)
       (should (= (plist-get node :width) 90))
       (should (= (plist-get node :height) 80))
@@ -319,7 +325,7 @@
          (room (car (plist-get scene :rooms)))
          (svg (lispm-office-render-svg scene nil 0.25 0 0)))
     (should (equal (dom-attr svg 'data-view) "map"))
-    (should (string-match-p "agents" (dom-texts svg)))
+    (should (string-match-p (regexp-quote (plist-get room :label)) (dom-texts svg)))
     (dolist (text (dom-by-tag svg 'text))
       (should (<= (dom-attr text 'y) (+ (plist-get room :y) (plist-get room :height)))))))
 

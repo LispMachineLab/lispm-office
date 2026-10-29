@@ -43,7 +43,7 @@
         (setq lispm-office-plugin--saved-header header-line-format
               lispm-office-plugin--header-was-local (local-variable-p 'header-line-format)
               lispm-office-plugin--header
-              (list '(:eval (lispm-office--view-switcher)) " " header-line-format))
+              (list '(:eval (lispm-office--view-switcher)) header-line-format))
         (setq-local header-line-format lispm-office-plugin--header))
     (when (eq header-line-format lispm-office-plugin--header)
       (if lispm-office-plugin--header-was-local
