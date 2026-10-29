@@ -14,6 +14,9 @@ running throughout. =q= in Work also returns to the conversation.
 
 Work selects the current agent's desk and room. Click a desk or press =RET= to
 open its optional Inspector side window with Work, Mailbox and Character tabs.
+In Fit mode, the room fills the available buffer area and its desks reflow when
+the window changes size. Avatars and text keep their proportions; saved seat
+identities stay unchanged. =Help= lists the view's keyboard commands.
 Open Chat navigates to the selected conversation. If you select another agent
 in a second window while Work is visible, it follows that agent by default; set
 =lispm-office-follow-current-agent= to =nil= to keep your desk selection.

@@ -58,6 +58,9 @@
 (defvar-local lispm-office--records nil "Last cheap live snapshot.")
 (defvar-local lispm-office--state nil "Persistent seats and room allocation.")
 (defvar-local lispm-office--plan nil "Geometry derived from the current snapshot.")
+(defvar-local lispm-office--display-plan nil "Responsive geometry used by the displayed image.")
+(defvar-local lispm-office--display-context nil "Snapshot and room used for the displayed geometry.")
+(defvar-local lispm-office--chrome-height 0 "Measured height of controls above the drawing.")
 (defvar-local lispm-office--selected nil "Selected stable agent key.")
 (defvar-local lispm-office--room nil "Focused room id, or nil for the whole office.")
 (defvar-local lispm-office--scale 1.0 "Requested drawing scale.")
@@ -191,7 +194,9 @@ Manual desk selections survive updates from the same source identity."
 
 (defun lispm-office--window ()
   "Return a window displaying the current Office buffer."
-  (get-buffer-window (current-buffer) 'visible))
+  (if (eq (window-buffer (selected-window)) (current-buffer))
+      (selected-window)
+    (get-buffer-window (current-buffer) 'visible)))
 
 (defun lispm-office--graphic-p ()
   "Whether the visible Office window supports SVG images."
@@ -205,30 +210,47 @@ Manual desk selections survive updates from the same source identity."
   (seq-filter (lambda (node)
                 (or (null lispm-office--room)
                     (equal lispm-office--room (plist-get node :room))))
-              (plist-get lispm-office--plan :nodes)))
+              (plist-get (lispm-office--scene-plan) :nodes)))
+
+(defun lispm-office--scene-plan ()
+  "Return the displayed geometry when it belongs to the current snapshot."
+  (if (and lispm-office--display-plan
+           (eq (car lispm-office--display-context) lispm-office--plan)
+           (equal (cadr lispm-office--display-context) lispm-office--room))
+      lispm-office--display-plan
+    lispm-office--plan))
 
 (defun lispm-office--dimensions ()
   "Return the available drawing width and height."
   (if-let* ((window (lispm-office--window)))
-      (cons (max 240 (- (window-body-width window t) 24))
-            (max 180 (- (window-body-height window t) 130)))
+      (cons (max 1 (window-body-width window t))
+            (max 1 (- (window-body-height window t) lispm-office--chrome-height)))
     '(1000 . 600)))
 
 (defun lispm-office--fit-scale ()
-  "Fit the active room or office to its visible window.
-A focused room keeps readable desks even in a short split window;
-scrolling is preferable to collapsing it into the same map tile again."
-  (let* ((room (seq-find (lambda (room)
-                           (equal (plist-get room :id) lispm-office--room))
-                         (plist-get lispm-office--plan :rooms)))
-         (width (max 1 (or (plist-get room :width)
-                           (plist-get lispm-office--plan :width) 1)))
-         (height (max 1 (or (plist-get room :height)
-                            (plist-get lispm-office--plan :height) 1)))
-         (size (lispm-office--dimensions)))
-    (setq lispm-office--scale
-          (max (if room 1.0 0.08)
-               (min 1.5 (/ (float (car size)) width) (/ (float (cdr size)) height))))))
+  "Fit the room to the available width and height without stretching desks."
+  (let* ((size (lispm-office--dimensions))
+         (responsive (lispm-office-render-fit-room
+                      lispm-office--plan lispm-office--room (car size) (cdr size))))
+    (setq lispm-office--display-context (list lispm-office--plan lispm-office--room))
+    (if responsive
+        (setq lispm-office--display-plan (plist-get responsive :plan)
+              lispm-office--scale (plist-get responsive :scale))
+      (let ((width (max 1 (or (plist-get lispm-office--plan :width) 1)))
+            (height (max 1 (or (plist-get lispm-office--plan :height) 1))))
+        (setq lispm-office--scale
+              (max 0.08 (min 1.5 (/ (float (car size)) width) (/ (float (cdr size)) height)))))
+      ;; An overview keeps its rooms' shared geometry, while its background
+      ;; still occupies the full available canvas.
+      (setq lispm-office--display-plan (copy-sequence lispm-office--plan))
+      (setq lispm-office--display-plan
+            (plist-put lispm-office--display-plan :width
+                       (max (or (plist-get lispm-office--plan :width) 1)
+                            (/ (car size) lispm-office--scale))))
+      (setq lispm-office--display-plan
+            (plist-put lispm-office--display-plan :height
+                       (max (or (plist-get lispm-office--plan :height) 1)
+                            (/ (cdr size) lispm-office--scale)))))))
 
 (defun lispm-office--waiting ()
   "Return waiting records in the agent sidebar's existing order."
@@ -254,13 +276,16 @@ scrolling is preferable to collapsing it into the same map tile again."
 (defun lispm-office--draw ()
   "Draw cached data, without inspecting or querying an agent."
   (unless lispm-office--drawing
+    ;; Global line-number mode runs after major-mode setup.  Disable its
+    ;; buffer-local gutter before measuring the edge-to-edge image.
+    (when (bound-and-true-p display-line-numbers-mode)
+      (display-line-numbers-mode -1))
     (let ((lispm-office--drawing t)
           (inhibit-read-only t)
           (old-point (point))
           (window (lispm-office--window)))
-      (when lispm-office--fit (lispm-office--fit-scale))
       (lispm-office--prune-flights)
-      (setq lispm-office--size (lispm-office--dimensions) lispm-office--dirty nil)
+      (setq lispm-office--dirty nil)
       (erase-buffer)
       (insert (propertize (if lispm-office--demo "Office — Preview" "Agent Work") 'face 'bold))
       (insert (format "   %d conversations · %d rooms\n"
@@ -272,6 +297,7 @@ scrolling is preferable to collapsing it into the same map tile again."
       (insert " ") (lispm-office--button "−" #'lispm-office-zoom-out)
       (insert " ") (lispm-office--button "+" #'lispm-office-zoom-in)
       (insert " ") (lispm-office--button (if lispm-office--text "Pictures" "Text") #'lispm-office-toggle-text)
+      (insert " ") (lispm-office--button "Help" #'describe-mode)
       (insert "\nWaiting: ")
       (if-let* ((waiting (lispm-office--waiting)))
           (progn
@@ -302,8 +328,19 @@ scrolling is preferable to collapsing it into the same map tile again."
                           (or (plist-get (plist-get selected :status) :state) 'unknown)
                           (or (plist-get (plist-get selected :status) :msg) "")))
                  (if window (window-body-width window) 100) nil nil "…") "\n"))
-      (insert "\n")
+      (when-let* ((unknown (seq-filter (lambda (r) (null (plist-get r :key))) lispm-office--records)))
+        (insert "Starting: " (mapconcat (lambda (r) (substring-no-properties (or (plist-get r :name) "Agent"))) unknown ", ")
+                " (waiting for session ids)\n"))
+      (when lispm-office--demo (insert "Developer preview only. Agent actions are disabled.\n"))
       (setq lispm-office--floor-start (point))
+      (setq lispm-office--chrome-height
+            (if window
+                (cdr (window-text-pixel-size window (point-min) (point) nil nil nil t))
+              0))
+      (let ((scale lispm-office--scale))
+        (lispm-office--fit-scale)
+        (unless lispm-office--fit (setq lispm-office--scale scale)))
+      (setq lispm-office--size (lispm-office--dimensions))
       (cond
        ((null (plist-get lispm-office--plan :nodes))
         (insert "No live conversations with a known session id yet.\n"
@@ -314,33 +351,29 @@ scrolling is preferable to collapsing it into the same map tile again."
                                  (plist-put (copy-sequence event) :progress
                                             (min 1.0 (max 0.0 (- now (plist-get event :started))))))
                                lispm-office--flights))
-               (svg (lispm-office-render-svg lispm-office--plan lispm-office--selected
+               (svg (lispm-office-render-svg (lispm-office--scene-plan) lispm-office--selected
                                               lispm-office--scale lispm-office--phase
                                               lispm-office--room events))
                (start (point)))
           (insert-image (lispm-ui-svg-image svg) "Office floor")
           (add-text-properties start (point)
                                (list 'keymap lispm-office-mode-map
-                                     'help-echo "Click a desk to inspect it; click a map room to enter."))
-          (insert "\n")))
+                                     'help-echo "Click a desk to inspect it; click a map room to enter."))))
        (t (lispm-office-render-text lispm-office--plan lispm-office--selected lispm-office--room)))
-      (when-let* ((unknown (seq-filter (lambda (r) (null (plist-get r :key))) lispm-office--records)))
-        (insert "\nStarting: " (mapconcat (lambda (r) (substring-no-properties (or (plist-get r :name) "Agent"))) unknown ", ")
-                " (waiting for session ids)\n"))
-      (insert "\nArrows: desk   n: waiting   RET: inspect   w/m/c: tabs\n"
-              "o: chat   s: message   a/A: approve/all   d: deny\n"
-              "+/−: zoom   0: fit   h: overview   g: refresh   q: return\n")
-      (when lispm-office--demo (insert "Developer preview only. Agent actions are disabled.\n"))
+      (unless (lispm-office--graphic-p)
+        (insert "\nArrows: desk   n: waiting   RET: inspect   w/m/c: tabs\n"
+                "o: chat   s: message   a/A: approve/all   d: deny\n"
+                "+/−: zoom   0: fit   h: overview   g: refresh   q: return\n"))
       (goto-char (min old-point (point-max)))
       (when window (set-window-hscroll window 0)))))
 
 (defun lispm-office--animated-p ()
   "Whether visible graphical content currently needs animation."
   (and lispm-office-animate (lispm-office--graphic-p)
-       (or (lispm-office-render-visible-events lispm-office--plan lispm-office--scale
+       (or (lispm-office-render-visible-events (lispm-office--scene-plan) lispm-office--scale
                                                lispm-office--room lispm-office--flights)
            (and (>= (plist-get (lispm-office-render-projection
-                                lispm-office--plan lispm-office--scale lispm-office--room) :scale) 0.45)
+                                (lispm-office--scene-plan) lispm-office--scale lispm-office--room) :scale) 0.45)
                 (seq-some (lambda (record)
                             (eq (plist-get (plist-get record :status) :state) 'working))
                           (lispm-office--visible-nodes))))))
@@ -480,9 +513,9 @@ scrolling is preferable to collapsing it into the same map tile again."
                             (plist-get lispm-office--plan :nodes))))
     (setq lispm-office--selected key)
     (when (or (< (plist-get (lispm-office-render-projection
-                            lispm-office--plan lispm-office--scale lispm-office--room) :scale) 0.45)
+                            (lispm-office--scene-plan) lispm-office--scale lispm-office--room) :scale) 0.45)
               (and (null lispm-office--room) (lispm-office--graphic-p)
-                   (let ((projection (lispm-office-render-projection lispm-office--plan lispm-office--scale))
+                   (let ((projection (lispm-office-render-projection (lispm-office--scene-plan) lispm-office--scale))
                          (size (lispm-office--dimensions)))
                      (or (> (plist-get projection :pixel-width) (car size))
                          (> (plist-get projection :pixel-height) (cdr size)))))
@@ -530,7 +563,8 @@ scrolling is preferable to collapsing it into the same map tile again."
 
 (defun lispm-office--move (dx dy)
   "Select the nearest desk in direction DX, DY."
-  (let* ((nodes (plist-get lispm-office--plan :nodes))
+  (let* ((nodes (if lispm-office--room (lispm-office--visible-nodes)
+                  (plist-get (lispm-office--scene-plan) :nodes)))
          (selected (seq-find (lambda (n) (equal lispm-office--selected (plist-get n :key))) nodes)))
     (if (not selected)
         (when nodes (lispm-office--select (plist-get (car nodes) :key)))
@@ -568,7 +602,7 @@ scrolling is preferable to collapsing it into the same map tile again."
              (key (and (integerp point) (get-text-property point 'lispm-office-key)))
              (xy (posn-object-x-y pos))
              (hit (and xy (lispm-office--graphic-p)
-                       (lispm-office-render-hit-test lispm-office--plan (car xy) (cdr xy)
+                       (lispm-office-render-hit-test (lispm-office--scene-plan) (car xy) (cdr xy)
                                                      lispm-office--scale lispm-office--room))))
         (cond
          (key (lispm-office--select key t))
@@ -580,7 +614,12 @@ scrolling is preferable to collapsing it into the same map tile again."
 (defun lispm-office-fit ()
   "Fit the current room or overview."
   (interactive)
-  (setq lispm-office--fit t) (lispm-office--draw) (lispm-office--sync-timer))
+  (setq lispm-office--fit t)
+  (lispm-office--draw)
+  (when-let* ((window (lispm-office--window)))
+    (set-window-start window (point-min))
+    (set-window-vscroll window 0 t))
+  (lispm-office--sync-timer))
 (defun lispm-office-overview ()
   "Show every occupied room."
   (interactive)
@@ -639,7 +678,7 @@ scrolling is preferable to collapsing it into the same map tile again."
 (define-derived-mode lispm-office-mode special-mode "Agent Work"
   "Visualize current agent work; toggle back to its conversation with C-c O."
   (lispm-office--ensure-ui)
-  (setq-local truncate-lines t cursor-type nil)
+  (setq-local truncate-lines t cursor-type nil display-line-numbers nil)
   (setq-local header-line-format '((:eval (lispm-office--view-switcher))))
   (when (boundp 'lispm-desktop-conversation-buffer)
     (setq-local lispm-desktop-conversation-buffer t))

@@ -37,6 +37,75 @@
        (seq-find (lambda (room) (equal room-id (plist-get room :id)))
                  (plist-get plan :rooms))))
 
+(defun lispm-office-render-fit-room (plan room-id width height)
+  "Return a responsive copy of PLAN focused on ROOM-ID in WIDTH by HEIGHT.
+The result is (:plan DISPLAY-PLAN :scale SCALE), or nil for a missing
+room.  WIDTH and HEIGHT are positive drawable pixel dimensions.  Live
+desks retain their sizes and stable slot order; only their display
+coordinates change.  Other rooms and the caller's persistent geometry
+remain intact.  Scale stays between 0.72 and 1.5, with vertical scrolling
+when the pane cannot hold readable desks.  A pane narrower than one desk
+at minimum scale necessarily also overflows horizontally."
+  (when-let* ((room (lispm-office-render--room plan room-id)))
+    (dolist (dimension (list width height))
+      (unless (and (numberp dimension) (> dimension 0) (< dimension 1.0e6))
+        (signal 'wrong-type-argument (list 'positive-finite-number dimension))))
+    (let* ((nodes (cl-stable-sort (copy-tree (plist-get room :nodes))
+                                  (lambda (left right)
+                                    (< (or (plist-get left :slot) 0)
+                                       (or (plist-get right :slot) 0)))))
+           (count (max 1 (length nodes)))
+           (desk-width (apply #'max 90 (mapcar (lambda (node) (plist-get node :width)) nodes)))
+           (desk-height (apply #'max 80 (mapcar (lambda (node) (plist-get node :height)) nodes)))
+           (pixels-wide (max (float width) (* 0.72 desk-width)))
+           (padding (min 16.0 (max 0.0 (/ (- (/ pixels-wide 0.72) desk-width) 2))))
+           (gap 12.0) (top 44.0) (bottom 16.0)
+           (columns 1) (rows count) (best-scale 0.0)
+           (packed-width 0.0) (packed-height 0.0))
+      ;; Only consider grids whose width fits at the minimum readable scale.
+      ;; A short pane adds rows below the viewport instead of hiding desks.
+      (dotimes (index count)
+        (let* ((cols (1+ index))
+               (lines (ceiling count cols))
+               (w (+ (* 2 padding) (* cols desk-width) (* (1- cols) gap)))
+               (h (+ top bottom (* lines desk-height) (* (1- lines) gap)))
+               (fit (min (/ pixels-wide w) (/ (float height) h))))
+          (when (and (<= (* w 0.72) (+ pixels-wide 0.001)) (> fit best-scale))
+            (setq columns cols rows lines best-scale fit packed-width w packed-height h))))
+      (let* ((scale (max 0.72 (min 1.5 best-scale)))
+             (world-width (max packed-width (/ pixels-wide scale)))
+             (world-height (max packed-height (/ (float height) scale)))
+             (cell-width (/ (- world-width (* 2 padding) (* (1- columns) gap)) columns))
+             (cell-height (/ (- world-height top bottom (* (1- rows) gap)) rows))
+             (display (copy-tree plan))
+             (display-room (lispm-office-render--room display room-id))
+             (by-key (make-hash-table :test #'equal)))
+        (cl-loop for node in nodes for index from 0 do
+                 (setf (plist-get node :x)
+                       (+ (plist-get room :x) padding
+                          (* (% index columns) (+ cell-width gap))
+                          (/ (- cell-width (plist-get node :width)) 2))
+                       (plist-get node :y)
+                       (+ (plist-get room :y) top
+                          (* (/ index columns) (+ cell-height gap))
+                          (/ (- cell-height (plist-get node :height)) 2)))
+                 (puthash (plist-get node :key) node by-key))
+        (setf (plist-get display-room :width) world-width
+              (plist-get display-room :height) world-height
+              (plist-get display-room :nodes) nodes
+              (plist-get display-room :responsive) t
+              (plist-get display :rooms)
+              (mapcar (lambda (item) (if (equal (plist-get item :id) room-id) display-room item))
+                      (plist-get display :rooms))
+              (plist-get display :nodes)
+              (mapcar (lambda (node) (or (gethash (plist-get node :key) by-key) node))
+                      (plist-get display :nodes))
+              (plist-get display :width)
+              (max (or (plist-get display :width) 0) (+ (plist-get room :x) world-width 16))
+              (plist-get display :height)
+              (max (or (plist-get display :height) 0) (+ (plist-get room :y) world-height 16)))
+        (list :plan display :scale scale)))))
+
 (defun lispm-office-render-projection (plan scale &optional room-id)
   "Return the projection of PLAN at SCALE, optionally focusing ROOM-ID.
 The result has :x, :y, :width, :height in world units; :scale is the
@@ -163,33 +232,38 @@ Coordinates are relative to the displayed image's top left."
                         (list (lispm-office-render--color :light))
                         (list (lispm-office-render--color :shade)))
     (if (eq level 'map)
-        (let ((font (min 42 (/ 12 scale))))
-          (lispm-ui-svg-fill group (+ x 15) (+ y 15) (- w 30) 80
+        (let* ((responsive (plist-get room :responsive))
+               (font (min 42 (/ 12 scale) (if responsive (/ h 8) 42))))
+          (lispm-ui-svg-fill group (+ x 15) (+ y 15) (- w 30)
+                             (if responsive (* h 0.25) 80)
                              (lispm-office-render--color :header))
           (lispm-office-render--text group (plist-get room :label)
-                                     (+ x 30) (+ y 70) font ink nil
+                                     (+ x 30) (+ y (if responsive (* h 0.22) 70)) font ink nil
                                      (floor (/ (- w 60) (* font 0.62))))
           (lispm-office-render--text group (format "%d" (length nodes))
-                                     (+ x (/ w 2)) (+ y 220) (min 100 (/ 26 scale)) ink "middle")
-          (lispm-office-render--text group "agents" (+ x (/ w 2)) (+ y 285)
+                                     (+ x (/ w 2)) (+ y (if responsive (* h 0.52) 220))
+                                     (min 100 (/ 26 scale) (if responsive (* h 0.2) 100)) ink "middle")
+          (lispm-office-render--text group "agents" (+ x (/ w 2)) (+ y (if responsive (* h 0.72) 285))
                                      font dim "middle")
           (when (> blocked 0)
             (lispm-office-render--text group (format "%d waiting" blocked)
-                                       (+ x (/ w 2)) (+ y 360) font
+                                       (+ x (/ w 2)) (+ y (if responsive (* h 0.9) 360)) font
                                        (lispm-office-render--color :accent) "middle")))
       (lispm-ui-svg-fill group (+ x 10) (+ y 10) (- w 20) 28
                          (lispm-office-render--color :header))
       (lispm-office-render--text group (plist-get room :label) (+ x 20) (+ y 29)
-                                 13 ink nil 42)
+                                 13 ink nil (max 1 (floor (/ (- w 60) 8))))
       (lispm-office-render--text group (format "%d" (length nodes)) (+ x w -20) (+ y 29)
                                  12 dim "end")
-      ;; Four quiet floor mats frame the pods without changing seat geometry.
-      (dotimes (pod 4)
-        (let ((px (+ x 15 (* (% pod 2) 210)))
-              (py (+ y 48 (* (/ pod 2) 193))))
-          (lispm-ui-svg-fill group px py 200 180
-                             (lispm-ui-blend (lispm-office-render--color :content)
-                                            (lispm-office-render--color :accent) 0.06)))))
+      ;; Responsive rooms contain only the occupied grid.  The canonical
+      ;; four-pod mats would paint empty seats beyond a short room's floor.
+      (unless (plist-get room :responsive)
+        (dotimes (pod 4)
+          (let ((px (+ x 15 (* (% pod 2) 210)))
+                (py (+ y 48 (* (/ pod 2) 193))))
+            (lispm-ui-svg-fill group px py 200 180
+                               (lispm-ui-blend (lispm-office-render--color :content)
+                                              (lispm-office-render--color :accent) 0.06))))))
     (when selected-p
       (svg-rectangle group (+ x 7) (+ y 7) (- w 14) (- h 14)
                      :fill "none" :stroke (lispm-office-render--color :focus)
