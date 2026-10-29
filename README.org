@@ -15,7 +15,9 @@ running throughout. =q= in Work also returns to the conversation.
 
 In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
 =C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its details;
-Open Chat returns to that same listener. In a text terminal, Work uses a text
+Open Chat returns to that same listener. Closing the Focus window releases its
+exclusive Work view and subscriptions; views shared with other windows or saved
+ordinary workspaces remain available. In a text terminal, Work uses a text
 agent list with keyboard navigation, inspection and conversation switching.
 The pixel room and sprite animation require graphical Emacs; terminal graphics
 protocols are not implemented by Office.

@@ -86,6 +86,10 @@
 (defvar-local lispm-office--floor-start 1 "Start of desk content after the view menu.")
 (defvar-local lispm-office--source-buffer nil "Agent buffer whose current work is shown.")
 (defvar-local lispm-office--source-key nil "Last identity followed from the source buffer.")
+(defvar-local lispm-office--focus-frame nil
+  "Focus frame owning this view exclusively, or nil for a shared view.
+Views first opened in ordinary frames can belong to inactive workspaces;
+they must survive the closing of a Focus frame that later reuses them.")
 
 ;; Return contexts contain live buffers and markers.  Keep them in this Emacs
 ;; session's window configurations, but never serialize them to desktop files.
@@ -192,6 +196,21 @@ Focus replaced inline details with a new chat, retain that new conversation."
            (lispm-office--restore-window window)
            (unless (get-buffer-window buffer t) (kill-buffer buffer)))))
      'no-minibuf t)))
+
+(defun lispm-office--frame-deleted (frame)
+  "Release views owned exclusively by the closing Focus FRAME.
+Keep views shown in another frame, and ordinary workspace views even when
+their saved layout is inactive and has no currently visible window."
+  (save-current-buffer
+    (save-selected-window
+      (dolist (buffer (copy-sequence lispm-office--buffers))
+        (when (and (buffer-live-p buffer)
+                   (eq (buffer-local-value 'lispm-office--focus-frame buffer) frame))
+          (with-current-buffer buffer
+            (setq lispm-office--focus-frame nil))
+          (unless (seq-some (lambda (window) (not (eq (window-frame window) frame)))
+                            (get-buffer-window-list buffer nil t))
+            (kill-buffer buffer)))))))
 
 (defun lispm-office-return ()
   "Return this window to its conversation, preserving the running session."
@@ -735,6 +754,7 @@ remains in scope; switching session returns to Session scope."
   (unless lispm-office--buffers
     (remove-hook 'window-size-change-functions #'lispm-office--windows-changed)
     (remove-hook 'window-state-change-functions #'lispm-office--windows-changed)
+    (remove-hook 'delete-frame-functions #'lispm-office--frame-deleted)
     (remove-hook 'lispm-ui-palette-changed-hook #'lispm-office--palette-changed)))
 
 (defun lispm-office--focus-selection ()
@@ -1009,6 +1029,8 @@ In text, move through agents in their displayed order instead."
     (add-hook 'lispm-agents-roster-change-functions #'lispm-office--changed))
   (add-hook 'window-size-change-functions #'lispm-office--windows-changed)
   (add-hook 'window-state-change-functions #'lispm-office--windows-changed)
+  ;; Run before Agent's Focus teardown removes its panes and identity.
+  (add-hook 'delete-frame-functions #'lispm-office--frame-deleted -80)
   (add-hook 'lispm-ui-palette-changed-hook #'lispm-office--palette-changed))
 
 (defun lispm-office--show (source &optional overview directory)
@@ -1035,7 +1057,15 @@ The source buffer and its input remain intact."
         ;; the corrupt file with an empty layout.
         (let ((state (lispm-office-layout-read path)))
           (lispm-office-mode)
-          (setq lispm-office--state state lispm-office--seat-path path)))
+          (setq lispm-office--state state lispm-office--seat-path path
+                lispm-office--focus-frame
+                (and (fboundp 'lispm-terminal-p)
+                     (lispm-terminal-p (window-frame window))
+                     (window-frame window)))))
+      (unless (and (eq lispm-office--focus-frame (window-frame window))
+                   (fboundp 'lispm-terminal-p)
+                   (lispm-terminal-p (window-frame window)))
+        (setq lispm-office--focus-frame nil))
       (setq lispm-office--source-buffer (and (not directory) (lispm-office--source-p source) source)
             lispm-office--project-root directory
             lispm-office--working-only nil

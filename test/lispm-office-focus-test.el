@@ -4,6 +4,9 @@
 (require 'cl-lib)
 (require 'lispm-office)
 (require 'lispm-core)
+(require 'lispm-office-test
+         (expand-file-name "lispm-office-test.el"
+                           (file-name-directory (or load-file-name buffer-file-name))))
 (defvar lispm-agents-show-function #'pop-to-buffer)
 ;; Exercise the real public Focus predicate and keymap without loading the
 ;; application entrypoint's optional MCP/network integrations in batch tests.
@@ -266,6 +269,75 @@
       (should-not (buffer-live-p owner))
       (should (eq (window-buffer listener) chat))
       (should (eq (window-buffer side) sessions)))))
+
+(ert-deftest lispm-office-focus-frame-close-releases-floor-and-inline-details ()
+  (dolist (inline '(nil t))
+    (lispm-office-test--isolated
+      (let ((delete-frame-functions nil)
+            (frame (selected-frame)))
+        (switch-to-buffer source-a)
+        (insert "Unsent Focus draft")
+        (cl-letf (((symbol-function 'lispm-terminal-p)
+                   (lambda (&optional candidate) (eq (or candidate (selected-frame)) frame))))
+          (let ((office (lispm-office)) timer)
+            (with-current-buffer office
+              (should (eq lispm-office--focus-frame frame))
+              (when inline (lispm-office--select '(claude "a") t))
+              (setq timer (run-at-time 60 60 #'ignore)
+                    lispm-office--timer timer))
+            (should (memq #'lispm-office--frame-deleted delete-frame-functions))
+            (should (memq #'lispm-office--changed lispm-agents-roster-change-functions))
+            ;; Emacs calls this before removing FRAME's windows.
+            (lispm-office--frame-deleted frame)
+            (should-not (buffer-live-p office))
+            (should-not lispm-office--buffers)
+            (should-not lispm-office-inspect--buffers)
+            (should-not (memq timer timer-list))
+            (should-not (memq #'lispm-office--changed lispm-agents-roster-change-functions))
+            (should-not (memq #'lispm-office--frame-deleted delete-frame-functions))
+            (should (eq (window-buffer (selected-window)) source-a))
+            (should-not (window-parameter (selected-window) 'lispm-office-source))
+            (should (equal (with-current-buffer source-a (buffer-string)) "Unsent Focus draft"))))))))
+
+(ert-deftest lispm-office-focus-frame-close-preserves-another-frame-view ()
+  (lispm-office-test--isolated
+    (let ((frame (selected-frame))
+          (window-frame-function (symbol-function 'window-frame)))
+      (cl-letf (((symbol-function 'lispm-terminal-p) (lambda (&optional _) t)))
+        (let* ((office (lispm-office))
+               (other (split-window (selected-window) nil 'right)))
+          (set-window-buffer other office)
+          (with-current-buffer office (lispm-office--select '(claude "a") t))
+          ;; A batch Emacs has one frame; model only the second window's host.
+          (cl-letf (((symbol-function 'window-frame)
+                     (lambda (&optional window)
+                       (if (eq window other) 'other-frame
+                         (funcall window-frame-function window)))))
+            (lispm-office--frame-deleted frame))
+          (should (buffer-live-p office))
+          (should (buffer-local-value 'lispm-office-inspect--inline office))
+          (should-not (buffer-local-value 'lispm-office--focus-frame office))
+          (should (eq (window-buffer other) office))
+          (should (memq #'lispm-office--changed lispm-agents-roster-change-functions)))))))
+
+(ert-deftest lispm-office-focus-frame-close-preserves-inactive-ordinary-workspace ()
+  (lispm-office-test--isolated
+    (let ((focus nil) (frame (selected-frame)))
+      (cl-letf (((symbol-function 'lispm-terminal-p) (lambda (&optional _) focus)))
+        (let* ((office (lispm-office))
+               (ordinary-layout (current-window-configuration)))
+          (should-not (buffer-local-value 'lispm-office--focus-frame office))
+          (switch-to-buffer source-a)
+          (setq focus t)
+          ;; Reusing an ordinary workspace's view does not transfer ownership.
+          (should (eq (lispm-office) office))
+          (should-not (buffer-local-value 'lispm-office--focus-frame office))
+          (switch-to-buffer source-b)
+          (should-not (get-buffer-window office t))
+          (lispm-office--frame-deleted frame)
+          (should (buffer-live-p office))
+          (set-window-configuration ordinary-layout)
+          (should (eq (window-buffer (selected-window)) office)))))))
 
 (provide 'lispm-office-focus-test)
 ;;; lispm-office-focus-test.el ends here
