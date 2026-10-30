@@ -8,7 +8,7 @@ in graphical Emacs and on a text terminal.
 * Using it
 
 Enable the plugin, then click the =Conversation= or =Work= tab in the agent's header.
-Desktop draws these with its native Mac OS 9 tab control.
+LispM UI draws these with its shared Mac OS 9 tab control.
 =C-c O= performs the same toggle in the same window. Returning to Conversation
 restores the source buffer, draft, point and scroll position; the agent keeps
 running throughout. =q= in Work also returns to the conversation.
@@ -22,15 +22,16 @@ agent list with keyboard navigation, inspection and conversation switching.
 The pixel room and sprite animation require graphical Emacs; terminal graphics
 protocols are not implemented by Office.
 
-In the Desktop Agents sidebar, click a project's folder or name to open that
-directory's Work view in the main pane. Only the disclosure triangle folds or
-unfolds the list. This view includes all active sessions, including idle agents.
-The compact view menu offers =Working only= to narrow it to ongoing work,
-attention or queued input. It stays on the selected directory when another
-conversation gains focus. A directory view has no Conversation tab; =q= restores
-the previous main-pane view without choosing an agent.
-=M-x lispm-office-open-project= opens the current working directory directly.
-Without Office, Desktop shows its native directory Agent list instead.
+=M-x lispm-agents-open-project= opens the current project's Work view while
+Office is enabled. Agent owns this entrypoint and project membership: checkout
+subdirectories, linked worktrees and known descendants share the same project.
+The view includes all active sessions, including idle and done agents. Its compact
+view menu offers =Working only= for ongoing work, attention or queued input.
+It stays on the selected project when another conversation gains focus, has no
+Conversation tab, and =q= restores the previous buffer without choosing an agent.
+Without Office, the same Agent command opens its native live-agent list.
+=M-x lispm-office-open-project= invokes the visualization directly. A host may
+connect its folder selection to the Agent entrypoint and choose the main window.
 
 Work opened from a conversation starts in =Session= scope: the current agent,
 its descendants, and agents connected by active requests or waits. Sharing a
@@ -65,8 +66,8 @@ and shelves. Each room keeps its interior for the current Emacs session.
 Workers use 16 pixel portraits with different hairstyles, accessories and colors.
 New session identities receive randomized portraits from a shuffled set, so the
 first 16 get different looks. A session keeps its portrait through refreshes,
-scope changes and theme changes. Assignments last for the Emacs session and are
-randomized again after restarting Emacs. At detailed desk zoom, a configured
+scope changes and theme changes. Assignments last while Office is loaded and are randomized again after
+restarting Emacs or unloading and reinstalling the extension. At detailed desk zoom, a configured
 avatar replaces the pixel portrait's head.
 
 Working agents type, idle agents hold coffee, and agents needing attention raise
@@ -105,15 +106,22 @@ the displayed permissions cancels the preview. Terminal agents expose only the
 actions supported by their provider; open their chat for questions or approvals.
 Leaving Work clears its details and releases its subscriptions. Disabling
 =lispm-office-plugin-mode= restores conversations and their original headers,
-and removes the plugin's local bindings and roster observers. Returning to a saved
-workspace clears obsolete Inspector panes from older versions and restores the
-source of a closed Work view.
+and closes previews, removes local bindings and observers, and restores saved
+tab layouts before releasing their view buffers. Enabling it again is safe.
 
 * Installing
 
-Requires Emacs 30.1+, LispM Kit 0.2.0+, LispM UI 0.5.0+ and LispM Agent with the
-roster API from the merged [[https://github.com/LispMachineLab/lispm-agent/pull/135][PR #135]]. Use a LispM Agent revision that includes
-that API; no released version is assumed here.
+Office 0.2.0 requires Emacs 30.1+, LispM Agent 0.15.0+ (package =lispm=),
+LispM Kit 0.2.0+ and LispM UI 0.6.0+. It runs in ordinary Emacs with those
+libraries on =load-path=; no graphical shell is required.
+
+The Store activates =lispm-office-extension=. Requiring this feature enables the
+plugin; unloading it closes every Work/details/preview view, cancels animation,
+restores conversation windows and inactive tab layouts, removes hooks and unloads
+Office's own features. Requiring it again loads the installed version and enables
+Office afresh. Shared Agent, Kit and UI features and running sessions remain.
+Default installation is a host/Store composition choice; removing Office leaves
+Agent's project list available, and it can be installed again from the Store.
 
 With the dependencies already on =load-path=, add this checkout:
 
@@ -140,21 +148,25 @@ It initializes its palette through LispM UI's public API.
 With sibling checkouts of LispM Kit and LispM UI:
 
 #+begin_src sh
-make test compile LISPM_AGENT=/path/to/agent-with-roster/lisp
+make test compile LISPM_AGENT=/path/to/lispm-agent/lisp
 #+end_src
 
 =EMACS=, =LISPM_KIT= and =LISPM_UI= select other binaries or checkouts.
-Tests pin a known roster API commit rather than assuming a released dependency.
+CI pins the Agent and UI revisions providing the declared public APIs.
 Integration tests use synthetic conversations with the real roster API; network,
 model and tool execution are forbidden. Tests cover persistent layout, large
 rosters, current-agent following, conversation restoration, input handling, stale
-approvals, mailbox reads and observer/timer cleanup.
+approvals, mailbox reads and observer/timer cleanup. The clean test process uses
+only Agent, Kit and UI. It checks Agent-owned project dispatch, cached filtering,
+shared tab controls, complete Store unload/reload, previews and inactive tab
+restoration. Focus fixtures verify the session pane and conversation position.
+Graphical screenshots are checked separately from these automated assertions.
 Compilation treats warnings as errors. [[file:docs/design.md][Design notes]] describe the data contract.
 
 For an optional developer preview, =M-x lispm-office-demo= opens twelve simulated
 agents without starting or messaging anything. =C-u M-x lispm-office-demo= asks
-for a count from 2 to 1000. The preview needs only Kit and UI, cannot perform agent
-actions and does not change saved seats.
+for a count from 2 to 1000. The preview cannot perform agent actions and does not
+change saved seats. It uses the same required libraries as the live view.
 
 * License
 

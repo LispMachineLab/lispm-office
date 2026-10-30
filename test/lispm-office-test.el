@@ -45,7 +45,7 @@ the assertions in BODY."
              (ert-skip "Close existing Office buffers before running lifecycle tests"))
            (cl-letf (((symbol-function 'require)
                       (lambda (feature &optional filename noerror)
-                        (if (eq feature 'lispm-agents-roster) t
+                        (if (eq feature 'lispm-agents-work) t
                           (funcall roster-require feature filename noerror))))
                      ((symbol-function 'lispm-agents-roster)
                       (lambda () (setq roster-reads (1+ roster-reads)) records))
@@ -105,11 +105,11 @@ The actual SVG image implementation is used."
     (let ((original-require (symbol-function 'require)))
       (cl-letf (((symbol-function 'require)
                  (lambda (feature &optional filename noerror)
-                   (if (eq feature 'lispm-agents-roster) nil
+                   (if (eq feature 'lispm-agents-work) nil
                      (funcall original-require feature filename noerror)))))
         (let ((error (should-error (lispm-office) :type 'user-error)))
-          (should (string-match-p "roster API" (error-message-string error)))
-          (should (string-match-p "Update lispm-agent" (error-message-string error))))))
+          (should (string-match-p "0.15.0" (error-message-string error)))
+          (should (string-match-p "LispM Agent" (error-message-string error))))))
     (should-not lispm-office--buffers)
     (should-not (file-exists-p lispm-office-seat-file))))
 

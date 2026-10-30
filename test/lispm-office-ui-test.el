@@ -100,9 +100,9 @@
 (ert-deftest lispm-office-ui-conversation-switcher-uses-host-native-tabs ()
   (lispm-office-project-test--isolated
     (let (seen)
-      (cl-letf (((symbol-function 'lispm-desktop-platinum-tabs-width)
+      (cl-letf (((symbol-function 'lispm-ui-tabs-width)
                  (lambda (labels &optional _) (should (equal labels '("Conversation" "Work"))) 220))
-                ((symbol-function 'lispm-desktop-platinum-tabs)
+                ((symbol-function 'lispm-ui-tabs)
                  (lambda (tabs _width &optional _face)
                    (setq seen tabs)
                    (mapconcat (pcase-lambda (`(,label ,_ . ,properties))

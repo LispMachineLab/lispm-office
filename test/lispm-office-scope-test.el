@@ -3,11 +3,12 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'lispm-office)
+(require 'lispm-agents-work)
 
 (defun lispm-office-scope-test--record (id &rest props)
   "Make an idle roster record for ID with PROPS."
   (append (list :key (list 'lispm id) :name id :kind 'lispm :root "/tmp/office-scope/"
-                :status '(:state idle) :mailbox '(:queued 0)) props))
+                :alive t :status '(:state idle) :mailbox '(:queued 0)) props))
 
 (defun lispm-office-scope-test--keys (records)
   "Return RECORDS' sorted session ids."
