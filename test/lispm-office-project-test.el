@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'lispm-office-plugin)
+(require 'lispm-agents-work)
 (when (locate-library "lispm-agents-roster")
   (require 'lispm-agents-roster))
 
@@ -51,6 +52,10 @@ No model requests, process launches, details, or user files are accessed."
             (ordinary (generate-new-buffer " *Project ordinary*"))
             (conversation-window (selected-window))
             (lispm-agents-main-window-function (lambda () conversation-window))
+            (lispm-agents-work-display-function
+             (lambda (buffer)
+               (select-window conversation-window)
+               (switch-to-buffer buffer)))
             (roster-reads 0)
             (records (list
                       (lispm-office-project-test--record "source" alpha 'working 0 source)
@@ -170,7 +175,158 @@ No model requests, process launches, details, or user files are accessed."
         (should-not (buffer-live-p office))
         (should-not lispm-agents-roster-change-functions)))))
 
-(ert-deftest lispm-office-project-command-from-agent-window-uses-host-main-window ()
+(ert-deftest lispm-office-project-host-route-preserves-file-pane-and-draft ()
+  "The project renderer uses the session route, not the last-used file pane."
+  (lispm-office-project-test--isolated
+    (dotimes (line 90) (insert (format "Conversation draft line %d\n" line)))
+    (goto-char (point-min))
+    (forward-line 40)
+    (set-window-start conversation-window (save-excursion (forward-line -8) (point)) t)
+    (set-window-hscroll conversation-window 3)
+    (let* ((draft (buffer-string))
+           (draft-point (window-point conversation-window))
+           (draft-start (window-start conversation-window))
+           (file-window (split-window conversation-window nil 'right))
+           (side (display-buffer-in-side-window
+                  sidebar '((side . left) (slot . 0) (window-width . 12) (dedicated . t))))
+           (calls 0)
+           (lispm-agents-main-window-function (lambda () file-window))
+           (lispm-agents-work-display-function
+            (lambda (view)
+              (cl-incf calls)
+              ;; Model the host's session-column policy.  The actual selected
+              ;; sidebar and last-used file are deliberately not candidates.
+              (let ((window (seq-find
+                             (lambda (candidate)
+                               (and (not (window-parameter candidate 'window-side))
+                                    (with-current-buffer (window-buffer candidate)
+                                      (derived-mode-p 'lispm-chat-mode 'lispm-office-mode))))
+                             (window-list))))
+                (should (window-live-p window))
+                (select-window window)
+                (switch-to-buffer view)))))
+      (set-window-buffer file-window ordinary)
+      (with-current-buffer ordinary (insert "File remains visible"))
+      (select-window file-window)
+      (select-window side)
+      (let ((office (lispm-office-open-project alpha)))
+        (should (= calls 1))
+        (should (eq (window-buffer conversation-window) office))
+        (should (eq (window-buffer file-window) ordinary))
+        (should (eq (window-buffer side) sidebar))
+        (should (window-dedicated-p side))
+        (should (= (length (window-list)) 3))
+        (lispm-office-return)
+        (should (eq (window-buffer conversation-window) source))
+        (should (eq (window-buffer file-window) ordinary))
+        (should (= (window-point conversation-window) draft-point))
+        (should (= (window-start conversation-window) draft-start))
+        (should (= (window-hscroll conversation-window) 3))
+        (should (equal (with-current-buffer source (buffer-string)) draft))))))
+
+(ert-deftest lispm-office-project-host-created-column-closes-on-return ()
+  "Returning from a new host session column restores the original layout."
+  (lispm-office-project-test--isolated
+    (set-window-buffer conversation-window ordinary)
+    (let* ((side (display-buffer-in-side-window
+                  sidebar '((side . left) (slot . 0) (window-width . 12) (dedicated . t))))
+           (lispm-agents-main-window-function (lambda () conversation-window))
+           (lispm-agents-work-display-function
+            (lambda (view)
+              (select-window (split-window conversation-window nil 'left))
+              (switch-to-buffer view))))
+      (select-window side)
+      (let ((office (lispm-office-open-project alpha))
+            (new-window (selected-window)))
+        (should (= (length (window-list)) 3))
+        (should (eq (window-buffer conversation-window) ordinary))
+        (should (plist-get (window-parameter new-window 'lispm-office-source) :new-window))
+        (lispm-office-return)
+        (should-not (window-live-p new-window))
+        (should-not (buffer-live-p office))
+        (should (= (length (window-list)) 2))
+        (should (eq (window-buffer conversation-window) ordinary))
+        (should (eq (window-buffer side) sidebar))))))
+
+(ert-deftest lispm-office-project-host-created-column-keeps-last-main-window ()
+  "Return keeps the sole ordinary window after its adjacent file pane closes."
+  (lispm-office-project-test--isolated
+    (set-window-buffer conversation-window ordinary)
+    (let* ((side (display-buffer-in-side-window
+                  sidebar '((side . left) (slot . 0) (window-width . 12) (dedicated . t))))
+           (lispm-agents-work-display-function
+            (lambda (view)
+              (select-window (split-window conversation-window nil 'left))
+              (switch-to-buffer view))))
+      (select-window side)
+      (let* ((office (lispm-office-open-project alpha))
+             (column (selected-window))
+             (saved (window-parameter column 'lispm-office-source))
+             (point-marker (plist-get saved :point))
+             (start-marker (plist-get saved :start)))
+        (delete-window conversation-window)
+        (should (eq column (window-main-window)))
+        (lispm-office-return)
+        (should (window-live-p column))
+        (should (eq (window-buffer column) (plist-get saved :buffer)))
+        (should (eq (window-buffer side) sidebar))
+        (should (window-dedicated-p side))
+        (should (= (length (window-list)) 2))
+        (should-not (buffer-live-p office))
+        (should-not (window-parameter column 'lispm-office-source))
+        (should-not (marker-buffer point-marker))
+        (should-not (marker-buffer start-marker))))))
+
+(ert-deftest lispm-office-project-repurposed-column-becomes-user-owned ()
+  "A user-selected conversation takes ownership of a former Work column."
+  (lispm-office-project-test--isolated
+    (set-window-buffer conversation-window ordinary)
+    (let ((lispm-agents-work-display-function
+           (lambda (view)
+             (select-window (split-window conversation-window nil 'left))
+             (switch-to-buffer view))))
+      (lispm-office-open-project alpha)
+      (let* ((column (selected-window))
+             (old (window-parameter column 'lispm-office-source))
+             (old-point (plist-get old :point))
+             (old-start (plist-get old :start)))
+        ;; Reuse the column independently of Office, then toggle this new chat.
+        (switch-to-buffer other-source)
+        (insert "User-owned draft survives")
+        (goto-char 6)
+        (let ((office (lispm-office)))
+          (should-not (plist-get (window-parameter column 'lispm-office-source) :new-window))
+          (should-not (marker-buffer old-point))
+          (should-not (marker-buffer old-start))
+          (lispm-office-return)
+          (should (window-live-p column))
+          (should (eq (window-buffer column) other-source))
+          (should (= (window-point column) 6))
+          (should (equal (with-current-buffer other-source (buffer-string)) "User-owned draft survives"))
+          (should (eq (window-buffer conversation-window) ordinary))
+          (should-not (buffer-live-p office)))))))
+
+(ert-deftest lispm-office-project-return-error-releases-context-markers ()
+  "A host refusing window deletion cannot leak a detached return context."
+  (lispm-office-project-test--isolated
+    (set-window-buffer conversation-window ordinary)
+    (let ((lispm-agents-work-display-function
+           (lambda (view)
+             (select-window (split-window conversation-window nil 'left))
+             (switch-to-buffer view))))
+      (lispm-office-open-project alpha)
+      (let* ((column (selected-window))
+             (saved (window-parameter column 'lispm-office-source))
+             (point-marker (plist-get saved :point))
+             (start-marker (plist-get saved :start)))
+        (cl-letf (((symbol-function 'delete-window)
+                   (lambda (&rest _) (error "Host prevented closing this column"))))
+          (should-error (lispm-office-return)))
+        (should-not (window-parameter column 'lispm-office-source))
+        (should-not (marker-buffer point-marker))
+        (should-not (marker-buffer start-marker))))))
+
+(ert-deftest lispm-office-project-command-from-agent-window-uses-host-work-display ()
   (lispm-office-project-test--isolated
     (insert "Main window's unsent draft")
     (let ((other-window (split-window conversation-window nil 'right)))
@@ -178,7 +334,7 @@ No model requests, process launches, details, or user files are accessed."
       (select-window other-window)
       (insert "Secondary agent's unsent draft")
       ;; Interactive invocation uses this secondary conversation's directory,
-      ;; while the host main window remains the destination for the project.
+      ;; while the host Work callback selects the destination for the project.
       (call-interactively #'lispm-office-open-project)
       (let ((office (get-buffer "*LispM Office*")))
         (should (eq (window-buffer conversation-window) office))

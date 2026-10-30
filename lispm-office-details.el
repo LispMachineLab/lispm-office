@@ -105,43 +105,35 @@
     (lispm-ui-svg-image svg)))
 
 (defun lispm-office-details-header (target status node width)
-  "Insert TARGET's compact identity header, using STATUS and scene NODE.
+  "Insert TARGET's compact property-sheet heading, using STATUS and NODE.
 WIDTH is the drawable width in graphical pixels or terminal cells.  NODE's
 portrait identity is shared with the office scene, including a custom avatar.
-The name and current activity are selectable text; long activity is bounded to
-two lines with its complete text available as help.  Nothing is interactive."
+The centered name remains selectable.  A small portrait shares one line with
+the status, followed by one bounded activity line.  Nothing is interactive."
   (unless lispm-ui-current-palette (lispm-ui-palette-follow-theme))
   (let* ((width (max 1 (floor width)))
          (tty (lispm-ui-tty-p))
          (padding (if tty 2 16))
          (content-width (max 1 (- width padding)))
          (name (lispm-office-details--text
-                (or (plist-get target :name) (plist-get node :name) "Agent")))
+                (or (plist-get node :name) (plist-get target :name) "Agent")))
          (identity (or node (list :key (plist-get target :key))))
          (activity (lispm-office-details--text (plist-get status :msg))))
     (unless (bolp) (insert "\n"))
-    (when (and (not tty) (image-type-available-p 'svg) (>= width 40))
-      (let ((size (if (>= width 72) 56 40)))
-        (insert (lispm-ui-text-space (/ (- width size) 2))
-                (propertize " " 'display (lispm-office-details--portrait identity size)
-                            'help-echo (concat name " portrait"))
-                "\n")))
     (lispm-office-details--center
-     (propertize name 'face (if tty 'lispm-ui-title
-                              '(:inherit lispm-ui-title :height 1.15)))
+     (propertize name 'face 'lispm-ui-title)
      width)
-    (lispm-office-details--center (lispm-office-details--state-chip status) width)
+    (let* ((chip (lispm-office-details--state-chip status))
+           (portrait (and (not tty) (image-type-available-p 'svg)
+                          (>= width (+ 48 (lispm-office-details--measure chip)))
+                          (propertize " " 'display (lispm-office-details--portrait identity 32)
+                                      'help-echo (concat name " portrait")))))
+      (lispm-office-details--center
+       (if portrait (concat portrait (lispm-ui-text-space 8) chip) chip) width))
     (unless (string-empty-p activity)
-      (let* ((text (propertize activity 'face `(:foreground ,(lispm-ui-color :muted))))
-             (lines (lispm-ui-text-wrap text
-                                       (lambda (line)
-                                         (<= (lispm-office-details--measure line) content-width)))))
-        (cl-loop for line in lines for index from 0 below 2 do
-                 (let ((line (if (and (= index 1) (nthcdr 2 lines))
-                                 (concat (string-trim-right line) "…") line)))
-                   (put-text-property 0 (length line) 'help-echo activity line)
-                   (lispm-office-details--center
-                    (lispm-office-details--fit line content-width) width)))))))
+      (lispm-office-details--center
+       (lispm-office-details--fit
+        (propertize activity 'face 'shadow 'help-echo activity) content-width) width))))
 
 (defun lispm-office-details-heading (text width)
   "Insert one compact native engraved section heading TEXT within WIDTH."

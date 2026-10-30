@@ -15,7 +15,7 @@ running throughout. =q= in Work also returns to the conversation.
 
 In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
 =C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its details;
-Open Chat returns to that same listener. Closing the Focus window releases its
+Open Conversation returns to that same listener. Closing the Focus window releases its
 exclusive Work view and subscriptions; views shared with other windows or saved
 ordinary workspaces remain available. In a text terminal, Work uses a text
 agent list with keyboard navigation, inspection and conversation switching.
@@ -47,8 +47,12 @@ Cross-project collaborators share the session's display room. Project and All pr
 desks by project; these display choices never alter saved global seats.
 
 Click a desk or press =RET= to show that Agent's details in the same Work buffer.
-A centered portrait, name and status sit above native Work, Mailbox and Character
-tabs. =Back to Office= or =q= restores the floor, selection and scroll position;
+A compact centered name, pixel portrait and status sit above the
+=Back to Office= and =Open Conversation= controls. Adjacent native =Activity=
+and =Messages= tabs organize the details; =Identity= appears only for an agent
+with a character. Messages distinguish the request being handled from its queue.
+Switching tabs starts at the heading; live refreshes retain the reading position.
+=Back to Office= or =q= restores the floor, selection and scroll position;
 it does not open a second pane. In details, =o= opens the conversation,
 =TAB= / =S-TAB= move between controls, and arrows scroll the page.
 The room fills the available buffer area by default and its desks reflow when
@@ -75,7 +79,7 @@ a hand. An explicit wait on a visible peer can make the worker walk along a safe
 aisle and stand beside that peer. This movement represents an existing wait
 relationship in the roster.
 
-Open Chat navigates to the selected conversation. If you select another agent
+Open Conversation navigates to the selected conversation. If you select another agent
 in a second window while a conversation's Work view is visible, it follows that
 agent in Session scope; switching between the same session's chat and transcript
 preserves your scope. Set =lispm-office-follow-current-agent= to =nil= to keep your desk selection.
@@ -90,9 +94,9 @@ when there are many agents. Seats survive restarts; only
 | Arrows / C-b/f/p/n | Select a nearby desk                      |
 | n / TAB         | Select the next waiting agent               |
 | RET             | Inspect the selected conversation           |
-| w / m / c       | Work / Mailbox / Character                  |
+| w / m / c       | Activity / Messages / Identity, when available |
 | o / s           | Open chat / compose a message               |
-| a / d           | Approve / deny one pending permission       |
+| a / d           | Review / deny one pending permission in details |
 | A               | Preview and approve this agent’s pending calls |
 | x               | Confirm stopping this agent and clearing its queue |
 | + / - / 0       | Zoom in / out / fit                         |
@@ -101,8 +105,13 @@ when there are many agents. Seats survive restarts; only
 | t               | Toggle text view                            |
 | g / q           | Refresh / return to the previous view       |
 
-Approve All is limited to one selected agent and its current turn. A change to
-the displayed permissions cancels the preview. Terminal agents expose only the
+In details, =Review…= or =a= shows the full arguments for one permission in the
+same page. =Review All…= or =A= reviews that agent's current pending set.
+=Approve Action= / =Approve N Actions= explicitly confirms the displayed request;
+=Cancel Review= returns without approving anything. Changing tabs also cancels
+the review. A changed turn, replaced call or modified arguments makes confirmation
+unavailable; batch confirmation also rejects newly pending calls. Live refreshes
+never replace the request snapshot being reviewed. Terminal agents expose only the
 actions supported by their provider; open their chat for questions or approvals.
 Leaving Work clears its details and releases its subscriptions. Disabling
 =lispm-office-plugin-mode= restores conversations and their original headers,

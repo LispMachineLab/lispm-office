@@ -290,7 +290,7 @@ model requests, messages and permission actions must never run."
               (should-not lispm-office-inspect--key)
               (should (eq lispm-office-inspect--tab 'mailbox))
               (should (string-match-p "[Ww]aiting.*session\\|session identity" (buffer-string)))
-              (let ((back (next-button (point-min))))
+              (let ((back (or (button-at (point-min)) (next-button (point-min)))))
                 (should back)
                 (should (string-match-p "Back" (button-get back 'lispm-ui-label)))
                 (should-not (next-button (button-end back))))
