@@ -8,9 +8,9 @@ supplies drawing and controls; LispM Agent owns conversations, data and actions.
 ## Plugin and current work
 
 Load `lispm-office-plugin` and enable `lispm-office-plugin-mode` to add visible
-Conversation / Work tabs to Agent chat and terminal headers. Desktop supplies
-its native Mac OS 9 pane tabs; without Desktop the same controls use Emacs tab
-faces. The tabs are adjacent, and the active tab is in front. The local `C-c O`
+Conversation / Work tabs to Agent chat and terminal headers. LispM UI supplies
+its Mac OS 9 pane tabs and terminal equivalents through `lispm-ui-tabs` and
+`lispm-ui-tabs-width`. The active tab is in front; the local `C-c O`
 binding performs the same toggle. Existing header content is preserved and
 restored when the plugin is disabled.
 
@@ -19,15 +19,17 @@ buffer and its draft, point and scroll position; returning to Conversation, or
 pressing `q` in Work, restores them. This does not change the agent's canonical
 chat or transcript buffer, restart it or end its session.
 
-Opening a folder in the Desktop Agents sidebar enters a pinned Project view in
-the host's main window. The triangle alone controls folding. Folder activation
-calls the optional `lispm-desktop-agent-list-open-project-functions` hook; Office
-registers `lispm-office-open-project` while enabled and removes it on disable.
-Desktop falls back to its native directory Agent list without Office; no file
-browser is involved. Desktop is not a required dependency. The entrypoint also
-works directly with the current working directory, without a conversation or a
-Desktop sidebar. This entry has no Conversation tab and never infers a conversation
-from the first desk. `q` restores only the original main-pane buffer.
+Agent owns project navigation through `lispm-agents-open-project` and the optional
+`lispm-agents-open-project-functions` renderer hook. Office registers
+`lispm-office-open-project` while enabled and removes it on disable. The Agent
+entrypoint falls back to its native list without Office. A host owns only the
+folder hit areas and window placement, and may call the same Agent entrypoint.
+Office uses `lispm-agents-work-filter` on its cached roster, sharing Agent's
+project semantics for subdirectories, linked worktrees and live descendants.
+It does not duplicate project resolution or reread the roster during filtering.
+This entry has no Conversation tab and never infers a conversation from the first
+desk. `q` restores the original main-pane buffer. Ordinary Emacs, Focus and a
+text terminal use the same plugin; its code has no host-specific dependency.
 
 The directory is explicit and never inferred from the previously selected agent.
 Folder views initially include all active sessions, including idle and done
@@ -199,13 +201,30 @@ individual palettes.
 
 ## Dependency and distribution
 
-Live data requires the roster API introduced by the merged
-[LispM Agent PR #135](https://github.com/LispMachineLab/lispm-agent/pull/135).
-Tests pin a known API commit; no released dependency version is assumed. The
-runtime check explains a missing API. An isolated simulated preview is available
-for development and does not subscribe to agents or perform actions.
+Office 0.2.0 declares LispM Agent 0.15.0, LispM UI 0.6.0, LispM Kit 0.2.0
+and Emacs 30.1 as its minimum versions. Agent supplies the roster and public
+project filtering and renderer hook. CI pins the precise Agent/UI revisions
+providing those APIs. Runtime checks explain a missing API. The simulated
+preview does not subscribe to agents or perform actions.
 
-The plugin declares its commands through LispM Kit and is installed alongside
-LispM Agent. When Desktop is present, its public conversation-buffer marker keeps
-Work in the session column. There is no runtime Desktop dependency or native OS
-API.
+The plugin declares its commands through LispM Kit. Hosts may classify
+`lispm-office-mode` as conversation content in their own adapters; Office neither
+knows their marker variables nor installs their mode hooks. No native OS API is
+required.
+
+## Activation and removal
+
+The passive `lispm-office-plugin` feature defines an explicit global mode. The
+Store entry `lispm-office-extension` enables it when required. Unloading that
+entry disables all views, including developer previews, releases timers and
+hooks, repairs saved tab layouts and unloads all Office features in dependency
+order. Requiring the entry again reads the installed sources, so replacing a
+package version cannot leave old Office definitions active. Agent, Kit and UI
+remain loaded; conversation buffers, processes and drafts remain intact.
+
+`lispm-office-shutdown` is idempotent and also serves direct core/plugin unload.
+Live window return contexts preserve markers and scroll positions. During full
+shutdown, saved Emacs tab and history window configurations are restored locally,
+repaired and saved back without selecting tabs or firing navigation hooks. This
+removes future dead-buffer placeholders before restoration hooks are removed.
+Opening a new view reinstalls only the observers it needs.

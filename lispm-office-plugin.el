@@ -18,7 +18,7 @@
 (defvar lispm-chat-mode-hook)
 (defvar lispm-session-mode-hook)
 (defvar lispm-agents-sessions-changed-hook)
-(defvar lispm-desktop-agent-list-open-project-functions nil)
+(defvar lispm-agents-open-project-functions)
 (defvar lispm-office-plugin-mode)
 (defvar-local lispm-office-plugin--saved-header nil "Header before plugin activation.")
 (defvar-local lispm-office-plugin--header-was-local nil "Whether the original header was local.")
@@ -89,33 +89,31 @@ Global window hooks pass a frame; local invocations can pass a window."
   (remove-hook 'lispm-chat-mode-hook #'lispm-office-plugin--attach)
   (remove-hook 'lispm-session-mode-hook #'lispm-office-plugin--attach)
   (remove-hook 'lispm-agents-sessions-changed-hook #'lispm-office-plugin--sessions-changed)
-  (remove-hook 'lispm-desktop-agent-list-open-project-functions #'lispm-office-open-project)
+  (remove-hook 'lispm-agents-open-project-functions #'lispm-office-open-project)
   (remove-hook 'window-selection-change-functions #'lispm-office-plugin--window-changed)
   (remove-hook 'window-buffer-change-functions #'lispm-office-plugin--window-changed)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when lispm-office-agent-mode (lispm-office-agent-mode -1))))
-  (dolist (buffer (copy-sequence lispm-office--buffers))
-    (when (and (buffer-live-p buffer)
-               (not (buffer-local-value 'lispm-office--demo buffer)))
-      (kill-buffer buffer))))
+  (when (fboundp 'lispm-office-shutdown) (lispm-office-shutdown)))
 
 ;;;###autoload
 (define-minor-mode lispm-office-plugin-mode
   "Integrate the current-work visualization into LispM Agent sessions.
 Use the Conversation / Work control or C-c O to switch the current window.
-Disabling closes live panels and inspectors, leaving agent sessions intact."
+Disabling closes all panels, previews and inspectors; sessions stay intact."
   :global t :group 'lispm-office
   (if (not lispm-office-plugin-mode)
       (lispm-office-plugin--disable)
     (condition-case err
         (progn
-          (unless (require 'lispm-agents-roster nil t)
-            (user-error "Update lispm-agent to a version containing the roster API"))
+          (require 'lispm-office)
+          (unless (require 'lispm-agents-work nil t)
+            (user-error "LispM Agent 0.15.0 or later is required"))
           (add-hook 'lispm-chat-mode-hook #'lispm-office-plugin--attach)
           (add-hook 'lispm-session-mode-hook #'lispm-office-plugin--attach)
           (add-hook 'lispm-agents-sessions-changed-hook #'lispm-office-plugin--sessions-changed)
-          (add-hook 'lispm-desktop-agent-list-open-project-functions #'lispm-office-open-project)
+          (add-hook 'lispm-agents-open-project-functions #'lispm-office-open-project)
           (add-hook 'window-selection-change-functions #'lispm-office-plugin--window-changed)
           (add-hook 'window-buffer-change-functions #'lispm-office-plugin--window-changed)
           (lispm-office-plugin--sessions-changed))

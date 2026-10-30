@@ -45,7 +45,6 @@
 (declare-function lispm-terminal-show "lispm-terminal" (agent &optional stay))
 (declare-function lispm-terminal-keys-mode "lispm-terminal" (&optional arg))
 (defvar lispm-terminal-map)
-(declare-function lispm-desktop-platinum-tabs "lispm-desktop-platinum-controls" (tabs width &optional face))
 (declare-function lispm-waiting-calls "lispm-runtime" (agent))
 (declare-function lispm-asked "lispm-runtime" (call))
 (declare-function lispm-approve-for "lispm-runtime" (agent &optional id))
@@ -505,18 +504,11 @@ preview.  The runtime also bounds synchronous continuations to this turn."
                                (with-current-buffer inspector
                                  (lispm-office-inspect--set-tab (car entry)))))))
            '((work . "Work") (mailbox . "Mailbox") (character . "Character")))))
-    (if (and (fboundp 'lispm-desktop-platinum-tabs)
-             (or (lispm-ui-tty-p) (>= width 164)))
-        (insert (lispm-desktop-platinum-tabs tabs width))
-      (let ((used 0))
-        (dolist (tab tabs)
-          (let* ((label (propertize (concat " " (car tab) " ")
-                                    'face (if (cadr tab) 'tab-line-tab-current 'tab-line-tab)))
-                 (size (if (lispm-ui-tty-p) (string-width label) (string-pixel-width label))))
-            (when (and (> used 0) (> (+ used size) width))
-              (insert "\n") (setq used 0))
-            (insert (apply #'propertize label (cddr tab)))
-            (cl-incf used size)))))
+    ;; A button category inherits the text-link face.  Images already draw
+    ;; their own labels and edge; terminal tabs keep UI's active/inactive faces.
+    (unless (lispm-ui-tty-p)
+      (dolist (tab tabs) (nconc tab '(face default))))
+    (insert (lispm-ui-tabs tabs width))
     (insert "\n")))
 
 (defun lispm-office-inspect--title (text)
@@ -898,6 +890,7 @@ and buffer teardown omit it so they cannot overwrite the host's next view."
 
 (define-derived-mode lispm-office-inspect-mode special-mode "Office Inspector"
   "Inspect one Office conversation's work, mailbox and character."
+  (lispm-office-inspect--enable)
   (setq-local truncate-lines nil
               truncate-partial-width-windows nil
               word-wrap t)
@@ -1124,9 +1117,12 @@ The Office calls this from its window visibility callback."
         (assq-delete-all 'lispm-office-inspector window-persistent-parameters))
   nil)
 
-(add-to-list 'window-persistent-parameters '(lispm-office-inspector . writable))
-(add-hook 'window-state-change-functions #'lispm-office-inspect-cleanup-windows)
-(add-hook 'tab-bar-tab-post-select-functions #'lispm-office-inspect-cleanup-windows)
+(defun lispm-office-inspect--enable ()
+  "Install restoration support for open Inspector and Work views.
+Calling this repeatedly is safe, including after plugin disable/re-enable."
+  (add-to-list 'window-persistent-parameters '(lispm-office-inspector . writable))
+  (add-hook 'window-state-change-functions #'lispm-office-inspect-cleanup-windows)
+  (add-hook 'tab-bar-tab-post-select-functions #'lispm-office-inspect-cleanup-windows))
 
 (provide 'lispm-office-inspect)
 ;;; lispm-office-inspect.el ends here

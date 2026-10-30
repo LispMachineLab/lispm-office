@@ -490,7 +490,7 @@ model requests, messages and permission actions must never run."
         (lispm-office-plugin-test--selection-event)
         (should (equal (buffer-local-value 'lispm-office--selected office) other-key))))))
 
-(ert-deftest lispm-office-plugin-disable-preserves-conversation-and-developer-preview ()
+(ert-deftest lispm-office-plugin-disable-preserves-conversation-and-closes-developer-preview ()
   (lispm-office-plugin-test--isolated
     (lispm-office-plugin-mode 1)
     (switch-to-buffer chat)
@@ -500,7 +500,7 @@ model requests, messages and permission actions must never run."
       (lispm-office-plugin-mode -1)
       (should-not (buffer-live-p office))
       (should-not (buffer-live-p inspector))
-      (should (buffer-live-p preview))
+      (should-not (buffer-live-p preview))
       (should (buffer-live-p source))
       (should (buffer-live-p chat))
       (should (eq (lispm-agent-buffer agent) source))
