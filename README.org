@@ -1,9 +1,160 @@
 #+title: LispM Office
 
-A living office of LispM agents, inside Emacs.
+A LispM Agent plugin that adds a Work view to your current conversation and its
+explicit collaborators. Each conversation has a desk, and an in-page view shows its
+current work and mailbox. LispM UI draws the controls and view
+in graphical Emacs and on a text terminal.
 
-Each live conversation has a desk. Rooms group projects, and an inspector
-shows an agent's current work and mailbox.
+* Using it
+
+Enable the plugin, then click the =Conversation= or =Work= tab in the agent's header.
+Desktop draws these with its native Mac OS 9 tab control.
+=C-c O= performs the same toggle in the same window. Returning to Conversation
+restores the source buffer, draft, point and scroll position; the agent keeps
+running throughout. =q= in Work also returns to the conversation.
+
+In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
+=C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its details;
+Open Chat returns to that same listener. Closing the Focus window releases its
+exclusive Work view and subscriptions; views shared with other windows or saved
+ordinary workspaces remain available. In a text terminal, Work uses a text
+agent list with keyboard navigation, inspection and conversation switching.
+The pixel room and sprite animation require graphical Emacs; terminal graphics
+protocols are not implemented by Office.
+
+In the Desktop Agents sidebar, click a project's folder or name to open that
+directory's Work view in the main pane. Only the disclosure triangle folds or
+unfolds the list. This view includes all active sessions, including idle agents.
+The compact view menu offers =Working only= to narrow it to ongoing work,
+attention or queued input. It stays on the selected directory when another
+conversation gains focus. A directory view has no Conversation tab; =q= restores
+the previous main-pane view without choosing an agent.
+=M-x lispm-office-open-project= opens the current working directory directly.
+Without Office, Desktop shows its native directory Agent list instead.
+
+Work opened from a conversation starts in =Session= scope: the current agent,
+its descendants, and agents connected by active requests or waits. Sharing a
+project directory alone never adds another conversation. Waiting for a new
+session identity shows an empty pending view. The view menu offers =Project=
+for the source conversation's project, =All projects= for the whole roster, and
+=Session= to return to the current task.
+
+Session scope follows child relationships downward from the current agent, then
+active wait links in either direction and shared request ids. Parent pointers
+alone do not add ancestors, and linked peers do not bring unrelated children.
+Cross-project collaborators share the session's display room. Project and All projects group
+desks by project; these display choices never alter saved global seats.
+
+Click a desk or press =RET= to show that Agent's details in the same Work buffer.
+A centered portrait, name and status sit above native Work, Mailbox and Character
+tabs. =Back to Office= or =q= restores the floor, selection and scroll position;
+it does not open a second pane. In details, =o= opens the conversation,
+=TAB= / =S-TAB= move between controls, and arrows scroll the page.
+The room fills the available buffer area by default and its desks reflow when
+the window changes size. Raised walls, skirting and shadows separate the floor
+from the wallpaper; windows, clocks, framed art, noticeboards and shelves decorate
+the eight room styles. Furniture and walking paths stay below the wall.
+Avatars and text keep their proportions; saved seat
+identities stay unchanged. The view menu also contains room selection, text view,
+refresh and help. The floor has no status-summary rows or zoom buttons.
+
+Eight randomized room interiors combine patterned floors, wallpaper, dividing
+walls and doors. Compact desk groups leave aisles and space for coffee, plants
+and shelves. Each room keeps its interior for the current Emacs session.
+
+Workers use 16 pixel portraits with different hairstyles, accessories and colors.
+New session identities receive randomized portraits from a shuffled set, so the
+first 16 get different looks. A session keeps its portrait through refreshes,
+scope changes and theme changes. Assignments last for the Emacs session and are
+randomized again after restarting Emacs. At detailed desk zoom, a configured
+avatar replaces the pixel portrait's head.
+
+Working agents type, idle agents hold coffee, and agents needing attention raise
+a hand. An explicit wait on a visible peer can make the worker walk along a safe
+aisle and stand beside that peer. This movement represents an existing wait
+relationship in the roster.
+
+Open Chat navigates to the selected conversation. If you select another agent
+in a second window while a conversation's Work view is visible, it follows that
+agent in Session scope; switching between the same session's chat and transcript
+preserves your scope. Set =lispm-office-follow-current-agent= to =nil= to keep your desk selection.
+
+The details and actions use the selected scope. =n= leads to scoped agents
+that need you. Rooms grow automatically, with a map overview
+when there are many agents. Seats survive restarts; only
+=Compact Saved Seats…= removes empty reservations.
+
+| Key             | Action                                      |
+|-----------------+---------------------------------------------|
+| Arrows / C-b/f/p/n | Select a nearby desk                      |
+| n / TAB         | Select the next waiting agent               |
+| RET             | Inspect the selected conversation           |
+| w / m / c       | Work / Mailbox / Character                  |
+| o / s           | Open chat / compose a message               |
+| a / d           | Approve / deny one pending permission       |
+| A               | Preview and approve this agent’s pending calls |
+| x               | Confirm stopping this agent and clearing its queue |
+| + / - / 0       | Zoom in / out / fit                         |
+| S / P / h       | Session / Project / All projects            |
+| r               | Choose a room within the current scope      |
+| t               | Toggle text view                            |
+| g / q           | Refresh / return to the previous view       |
+
+Approve All is limited to one selected agent and its current turn. A change to
+the displayed permissions cancels the preview. Terminal agents expose only the
+actions supported by their provider; open their chat for questions or approvals.
+Leaving Work clears its details and releases its subscriptions. Disabling
+=lispm-office-plugin-mode= restores conversations and their original headers,
+and removes the plugin's local bindings and roster observers. Returning to a saved
+workspace clears obsolete Inspector panes from older versions and restores the
+source of a closed Work view.
+
+* Installing
+
+Requires Emacs 30.1+, LispM Kit 0.2.0+, LispM UI 0.5.0+ and LispM Agent with the
+roster API from the merged [[https://github.com/LispMachineLab/lispm-agent/pull/135][PR #135]]. Use a LispM Agent revision that includes
+that API; no released version is assumed here.
+
+With the dependencies already on =load-path=, add this checkout:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/lispm-office")
+(require 'lispm-office-plugin)
+(lispm-office-plugin-mode 1)
+#+end_src
+
+You can also install this repository with =package-vc-install= when the dependencies
+are available through your package setup, then enable the plugin as above.
+
+Seats are kept in =office-seats.eld= under =lispm-directory=; set
+=lispm-office-seat-file= to use another file. Set =lispm-office-animate= to =nil= to
+disable animation. Enabling the plugin does not subscribe to the roster until a
+Work view opens. The view does not poll agents and stops its timer while hidden
+or when no visible animation is needed. Animation reuses six repeating pose
+images and schedules the next frame after drawing finishes, giving input time
+to run. Moving visitors and messages keep their positions and hit regions live.
+It initializes its palette through LispM UI's public API.
+
+* Development
+
+With sibling checkouts of LispM Kit and LispM UI:
+
+#+begin_src sh
+make test compile LISPM_AGENT=/path/to/agent-with-roster/lisp
+#+end_src
+
+=EMACS=, =LISPM_KIT= and =LISPM_UI= select other binaries or checkouts.
+Tests pin a known roster API commit rather than assuming a released dependency.
+Integration tests use synthetic conversations with the real roster API; network,
+model and tool execution are forbidden. Tests cover persistent layout, large
+rosters, current-agent following, conversation restoration, input handling, stale
+approvals, mailbox reads and observer/timer cleanup.
+Compilation treats warnings as errors. [[file:docs/design.md][Design notes]] describe the data contract.
+
+For an optional developer preview, =M-x lispm-office-demo= opens twelve simulated
+agents without starting or messaging anything. =C-u M-x lispm-office-demo= asks
+for a count from 2 to 1000. The preview needs only Kit and UI, cannot perform agent
+actions and does not change saved seats.
 
 * License
 
