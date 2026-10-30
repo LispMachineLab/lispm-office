@@ -24,6 +24,7 @@
 (declare-function lispm-agents-roster-buffer "lispm-agents-roster" (key))
 (declare-function lispm-agents-roster-details "lispm-inspect" (key))
 (declare-function lispm-agents-buffer-status "lispm-agents" (buffer))
+(declare-function lispm-agents-buffer-label "lispm-agents" (buffer))
 (declare-function lispm-agents-props "lispm-agents" (agent))
 (declare-function lispm-agents-show "lispm-agents" (buffer))
 (declare-function lispm-agent-turn "lispm-core" (agent))
@@ -81,6 +82,10 @@
   "Selected agent data cached for resize and palette redraws.")
 (defvar-local lispm-office-inspect--floor-state nil
   "Floor display state to restore when leaving the details page.")
+(defvar-local lispm-office-inspect--review nil
+  "Inline permission review with immutable labels and the original call snapshot.
+The plist holds :target, :turn, :calls, :all and :entries.  Runtime identities
+are revalidated at confirmation; a redraw never replaces this snapshot.")
 (defvar lispm-office-inspect--cached-permissions nil)
 (defvar lispm-office--plan)
 (defvar lispm-office-inspect-inline-mode)
@@ -210,7 +215,10 @@ No remembered buffer or agent object authorizes an action."
     (when (and action (not (memq action actions)))
       (user-error "%s does not support %s here; open its chat" (car key) action))
     (list :key (copy-sequence key) :buffer buffer :agent agent :actions actions
-          :name (if agent (symbol-name (lispm-agent-name agent)) (buffer-name buffer)))))
+          :name (if agent (symbol-name (lispm-agent-name agent))
+                  (or (and (fboundp 'lispm-agents-buffer-label)
+                           (lispm-agents-buffer-label buffer))
+                      (buffer-name buffer))))))
 
 (defun lispm-office-inspect--same-target (target action)
   "Re-resolve TARGET for ACTION, rejecting a replaced session object."
@@ -399,7 +407,9 @@ When EXACT, reject any addition or removal of current permissions."
          (turn (lispm-agent-turn agent))
          (call (lispm-office-inspect--choose-permission target call-id)))
     (lispm-office-inspect--validate-permissions target turn (list call))
-    (lispm-approve-for agent (car call))))
+    (if (and lispm-office-inspect--inline (equal key lispm-office-inspect--key))
+        (lispm-office-inspect--begin-review target turn (list call))
+      (lispm-approve-for agent (car call)))))
 
 (defun lispm-office-deny (key &optional call-id)
   "Ask for a reason and deny pending permission CALL-ID of KEY."
@@ -420,9 +430,87 @@ preview.  The runtime also bounds synchronous continuations to this turn."
          (turn (lispm-agent-turn agent))
          (calls (lispm-office-inspect--permissions target)))
     (unless calls (user-error "No permission call awaits approval"))
-    (when (lispm-office-inspect--confirm-all target turn calls)
-      (lispm-office-inspect--validate-permissions target turn calls t)
-      (lispm-approve-all-for agent))))
+    (if (and lispm-office-inspect--inline (equal key lispm-office-inspect--key))
+        (lispm-office-inspect--begin-review target turn calls t)
+      (when (lispm-office-inspect--confirm-all target turn calls)
+        (lispm-office-inspect--validate-permissions target turn calls t)
+        (lispm-approve-all-for agent)))))
+
+(defun lispm-office-inspect--top ()
+  "Start the current detail page at its heading in every visible window."
+  (goto-char (point-min))
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (set-window-point window (point-min))
+    (set-window-start window (point-min) t)
+    (set-window-hscroll window 0)
+    (set-window-vscroll window 0 t)))
+
+(defun lispm-office-inspect--begin-review (target turn calls &optional all)
+  "Review TARGET's TURN and CALLS in this page before explicit confirmation.
+ALL requires the complete pending set to remain identical.  Copy display text
+now so later runtime mutations cannot change the action the user reviewed."
+  (lispm-office-inspect--validate-permissions target turn calls all)
+  (setq lispm-office-inspect--review
+        (list :target target :turn turn :calls calls :all all
+              :entries
+              (mapcar (lambda (entry)
+                        (let ((asked (lispm-asked (cadr entry)))
+                              (print-length nil) (print-level nil) (print-circle t))
+                          (list :name (lispm-office-inspect--text (plist-get asked :name))
+                                :input (pp-to-string (plist-get asked :input)))))
+                      calls)))
+  (lispm-office-inspect--draw t)
+  (lispm-office-inspect--top))
+
+(defun lispm-office-inspect-review-cancel ()
+  "Leave permission review without sending an approval or changing the turn."
+  (interactive)
+  (setq lispm-office-inspect--review nil)
+  (lispm-office-inspect--draw)
+  (lispm-office-inspect--top))
+
+(defun lispm-office-inspect-review-confirm ()
+  "Approve only the exact target and calls displayed in this review."
+  (interactive)
+  (unless lispm-office-inspect--review (user-error "No approval is being reviewed"))
+  (let* ((review lispm-office-inspect--review)
+         (target (plist-get review :target))
+         (calls (plist-get review :calls))
+         (all (plist-get review :all)))
+    (lispm-office-inspect--validate-permissions target (plist-get review :turn) calls all)
+    (if all (lispm-approve-all-for (plist-get target :agent))
+      (lispm-approve-for (plist-get target :agent) (caar calls)))
+    (setq lispm-office-inspect--review nil)
+    (lispm-office-inspect--draw)
+    (lispm-office-inspect--top)))
+
+(defun lispm-office-inspect--review-page ()
+  "Draw the saved permission request and its explicit confirm/cancel controls."
+  (let* ((review lispm-office-inspect--review)
+         (calls (plist-get review :calls))
+         (failure (condition-case err
+                      (progn
+                        (lispm-office-inspect--validate-permissions
+                         (plist-get review :target) (plist-get review :turn)
+                         calls (plist-get review :all))
+                        nil)
+                    (error (error-message-string err)))))
+    (lispm-office-inspect--heading "Review requested access")
+    (insert (format "%d %s awaiting your approval.\n"
+                    (length calls) (if (= (length calls) 1) "action is" "actions are")))
+    (dolist (entry (plist-get review :entries))
+      (insert "\n" (propertize (plist-get entry :name) 'face 'bold) "\n"
+              (lispm-office-inspect--text (plist-get entry :input))))
+    (insert "\n")
+    (when failure
+      (lispm-office-inspect--empty (concat failure ". Cancel this review to refresh."))
+      (insert "\n"))
+    (lispm-office-inspect--button "Cancel Review" #'lispm-office-inspect-review-cancel)
+    (unless failure
+      (lispm-office-inspect--button
+       (if (= (length calls) 1) "Approve Action" (format "Approve %d Actions" (length calls)))
+       #'lispm-office-inspect-review-confirm))
+    (insert "\n")))
 
 (defun lispm-office-inspect--confirm-all (target turn calls)
   "Show complete arguments of TARGET's TURN CALLS before asking consent."
@@ -503,7 +591,11 @@ preview.  The runtime also bounds synchronous continuations to this turn."
                              (when (buffer-live-p inspector)
                                (with-current-buffer inspector
                                  (lispm-office-inspect--set-tab (car entry)))))))
-           '((work . "Work") (mailbox . "Mailbox") (character . "Character")))))
+           (if lispm-office-inspect--inline
+               (append '((work . "Activity") (mailbox . "Messages"))
+                       (when (plist-get lispm-office-inspect--model :character-available)
+                         '((character . "Identity"))))
+             '((work . "Work") (mailbox . "Mailbox") (character . "Character"))))))
     ;; A button category inherits the text-link face.  Images already draw
     ;; their own labels and edge; terminal tabs keep UI's active/inactive faces.
     (unless (lispm-ui-tty-p)
@@ -548,9 +640,15 @@ preview.  The runtime also bounds synchronous continuations to this turn."
   (setq lispm-office-inspect--button-end (point)))
 
 (defun lispm-office-inspect--set-tab (tab)
-  "Select TAB in this inspector."
-  (setq lispm-office-inspect--tab tab)
-  (lispm-office-inspect--draw))
+  "Select supported TAB and start its content at the top.
+Unlike a roster refresh, deliberate navigation must not inherit another
+page's scroll position.  Leaving a review never approves its requests."
+  (when (and lispm-office-inspect--inline (eq tab 'character)
+             (not (plist-get lispm-office-inspect--model :character-available)))
+    (user-error "This agent has no character identity"))
+  (setq lispm-office-inspect--tab tab lispm-office-inspect--review nil)
+  (lispm-office-inspect--draw)
+  (lispm-office-inspect--top))
 
 (defun lispm-office-inspect--act-preview (target turn call deny)
   "Act on the permission CALL shown for TARGET's TURN.
@@ -569,8 +667,14 @@ a new call that happens to reuse the old call's id."
         (if lispm-office-inspect--inline
             (insert (propertize (lispm-office-inspect--text (or (plist-get call :name) "Tool call"))
                                 'face 'bold 'help-echo (lispm-office-inspect--text (or id "")))
-                    "   " (propertize (capitalize (lispm-office-inspect--text (or (plist-get call :status) "unknown")))
-                                      'face 'shadow) "\n")
+                    "   " (propertize
+                             (pcase (plist-get call :status)
+                               ('ask "Needs approval") ('running "Running")
+                               ('done "Completed") ('failed "Failed")
+                               ('denied "Denied") ('stopped "Stopped")
+                               (_ (capitalize (lispm-office-inspect--text
+                                               (or (plist-get call :status) "unknown")))))
+                             'face 'shadow) "\n")
           (insert (lispm-office-inspect--text (or id "?")) "  "
                   (lispm-office-inspect--text (or (plist-get call :name) "Unknown call"))
                   "  [" (lispm-office-inspect--text (or (plist-get call :status) "unknown")) "]\n"))
@@ -584,7 +688,8 @@ a new call that happens to reuse the old call's id."
             (let ((turn (if lispm-office-inspect--inline
                             (plist-get lispm-office-inspect--model :turn)
                           (lispm-agent-turn (plist-get target :agent)))))
-              (lispm-office-inspect--button "Approve" #'lispm-office-inspect--act-preview
+              (lispm-office-inspect--button (if lispm-office-inspect--inline "Review…" "Approve")
+                                            #'lispm-office-inspect--act-preview
                                             target turn preview nil)
               (lispm-office-inspect--button "Deny" #'lispm-office-inspect--act-preview
                                             target turn preview t)
@@ -608,8 +713,11 @@ a new call that happens to reuse the old call's id."
 (defun lispm-office-inspect--mail-entry (entry)
   "Insert one inert mailbox ENTRY with its known metadata."
   (if lispm-office-inspect--inline
-      (insert (propertize (lispm-office-inspect--text (or (plist-get entry :from) "Message"))
-                          'face 'bold 'help-echo (lispm-office-inspect--text (or (plist-get entry :id) ""))) "\n")
+      (progn
+        (insert (propertize (lispm-office-inspect--text (or (plist-get entry :from) "Message"))
+                            'face 'bold 'help-echo (lispm-office-inspect--text (or (plist-get entry :id) ""))) "\n")
+        (when (plist-get entry :reply-to)
+          (lispm-office-inspect--line "Reply to" (plist-get entry :reply-to))))
     (dolist (field '((:from . "From") (:reply-to . "Reply to")
                      (:queued . "Queued") (:request-id . "Request") (:id . "Message")))
       (lispm-office-inspect--line (cdr field) (plist-get entry (car field)))))
@@ -622,7 +730,12 @@ a new call that happens to reuse the old call's id."
     (dolist (key keys)
       (let ((owner lispm-office-inspect--owner))
         (lispm-office-inspect--button
-         (format "%s / %s" (car key) (cadr key))
+         (or (plist-get
+              (seq-find (lambda (node) (equal key (plist-get node :key)))
+                        (and (boundp 'lispm-office--plan) (plist-get lispm-office--plan :nodes))) :name)
+             (condition-case nil
+                 (plist-get (lispm-office-inspect--target key) :name)
+               (error (format "%s conversation" (capitalize (symbol-name (car key)))))))
          #'lispm-office-inspect key 'work owner)))
     (insert "\n")))
 
@@ -715,10 +828,14 @@ a new call that happens to reuse the old call's id."
         (condition-case err
             (let* ((target (lispm-office-inspect--target lispm-office-inspect--key))
                    (status (lispm-agents-buffer-status (plist-get target :buffer)))
+                   (character (and (plist-get target :agent)
+                                   (lispm-agent-character (plist-get target :agent))))
                    (node (and (boundp 'lispm-office--plan)
                               (seq-find (lambda (item) (equal (plist-get item :key) lispm-office-inspect--key))
                                         (plist-get lispm-office--plan :nodes)))))
-              (list :target target :status status
+              (when (and (eq lispm-office-inspect--tab 'character) (not character))
+                (setq lispm-office-inspect--tab 'work))
+              (list :target target :status status :character-available (and character t)
                     :turn (when (plist-get target :agent) (lispm-agent-turn (plist-get target :agent)))
                     :node (or node (list :key lispm-office-inspect--key
                                          :kind (car lispm-office-inspect--key)
@@ -744,32 +861,60 @@ a new call that happens to reuse the old call's id."
          (pending (plist-get work :pending-calls))
          (recent (plist-get work :recent-calls))
          (files (plist-get work :files)))
-    (lispm-office-inspect--heading "Current work")
+    (lispm-office-inspect--heading "This turn")
     (if (not work)
         (lispm-office-inspect--empty "Open the conversation to see this agent's activity.")
       (insert (propertize (format "Turn %s" (or (plist-get work :turn) "—")) 'face 'bold)
               (format "   ·   %d pending   ·   %d files\n" (length pending) (length files)))
-      (when pending (lispm-office-inspect--calls "Pending actions" pending target))
+      (when pending
+        (when (> (length lispm-office-inspect--cached-permissions) 1)
+          (insert "\n")
+          (lispm-office-inspect--button "Review All…" #'lispm-office-approve-all lispm-office-inspect--key)
+          (insert "\n"))
+        (lispm-office-inspect--calls "Pending actions" pending target))
       (when recent (lispm-office-inspect--calls "Recent activity" recent target))
       (when files
         (lispm-office-inspect--heading "Files")
         (dolist (file files) (insert (lispm-office-inspect--text file) "\n")))
       (unless (or pending recent files)
         (insert "\n")
-        (lispm-office-inspect--empty "No tool activity recorded in this turn.")))))
+        (lispm-office-inspect--empty "No tool activity recorded in this turn.")))
+    (when (or (memq 'send (plist-get target :actions))
+              (and (memq 'abort (plist-get target :actions))
+                   (memq (plist-get (plist-get lispm-office-inspect--model :status) :state)
+                         '(working blocked thinking running))))
+      (insert "\n")
+      (when (memq 'send (plist-get target :actions))
+        (lispm-office-inspect--button "Send Message…" #'lispm-office-inspect-compose))
+      (when (and (memq 'abort (plist-get target :actions))
+                 (memq (plist-get (plist-get lispm-office-inspect--model :status) :state)
+                       '(working blocked thinking running)))
+        (lispm-office-inspect--button "Stop…" #'lispm-office-abort lispm-office-inspect--key))
+      (insert "\n"))))
 
 (defun lispm-office-inspect--inline-mailbox (details)
   "Render messages and collaboration links as sections of the page."
   (let* ((mailbox (plist-get details :mailbox))
          (handling (plist-get mailbox :handling))
          (queued (plist-get mailbox :queued)))
-    (lispm-office-inspect--heading "Messages")
-    (cond ((not mailbox) (lispm-office-inspect--empty "Mailbox details are unavailable for this agent."))
-          ((not (or handling queued)) (lispm-office-inspect--empty "No messages waiting."))
-          (t (when handling (lispm-office-inspect--mail-entry handling))
-             (mapc #'lispm-office-inspect--mail-entry queued))))
+    (cond ((not mailbox)
+           (lispm-office-inspect--heading "Messages")
+           (lispm-office-inspect--empty "Mailbox details are unavailable for this agent."))
+          ((not (or handling queued))
+           (lispm-office-inspect--heading "Messages")
+           (lispm-office-inspect--empty "No messages waiting."))
+          (t (when handling
+               (lispm-office-inspect--heading "Being handled")
+               (lispm-office-inspect--mail-entry handling))
+             (when queued
+               (lispm-office-inspect--heading (format "Queued · %d" (length queued)))
+               (mapc #'lispm-office-inspect--mail-entry queued)))))
   (lispm-office-inspect--relation "Waiting for" (plist-get details :waits-on))
-  (lispm-office-inspect--relation "Helping" (plist-get details :waited-on-by)))
+  (lispm-office-inspect--relation "Helping" (plist-get details :waited-on-by))
+  (when (memq 'send (plist-get (plist-get lispm-office-inspect--model :target) :actions))
+    (insert "\n")
+    (lispm-office-inspect--button "Send Message…" #'lispm-office-inspect-compose)
+    (insert "\n")))
 
 (defun lispm-office-inspect--draw (&optional cache-only)
   "Draw the current detail view; CACHE-ONLY never queries agent data."
@@ -778,6 +923,8 @@ a new call that happens to reuse the old call's id."
     (unless lispm-ui-current-palette (lispm-ui-palette-follow-theme))
     (unless cache-only (lispm-office-inspect--read-model))
     (let* ((inhibit-read-only t) (position (point))
+           (viewports (mapcar (lambda (window) (cons window (window-start window)))
+                              (get-buffer-window-list (current-buffer) nil t)))
            (model lispm-office-inspect--model)
            (target (plist-get model :target))
            (status (plist-get model :status))
@@ -786,32 +933,31 @@ a new call that happens to reuse the old call's id."
            (lispm-office-inspect--button-width 0))
       (setq lispm-office-inspect--width (lispm-office-inspect--available-width))
       (erase-buffer)
-      (insert "\n")
-      (lispm-office-inspect--button "‹ Back to Office" #'lispm-office-inspect-quit)
-      (insert "\n\n")
-      (if (plist-get model :error)
-          (progn (lispm-office-inspect--heading "Conversation unavailable")
-                 (lispm-office-inspect--empty (plist-get model :error)))
+      (when target
         (lispm-office-details-header target status (plist-get model :node) lispm-office-inspect--width)
-        (insert "\n")
-        (lispm-office-inspect--button "Open Chat" #'lispm-office-open-chat lispm-office-inspect--key)
-        (when (memq 'send (plist-get target :actions))
-          (lispm-office-inspect--button "Compose…" #'lispm-office-inspect-compose))
-        (when (and (memq 'approve-all (plist-get target :actions)) lispm-office-inspect--cached-permissions)
-          (lispm-office-inspect--button "Review Approvals…" #'lispm-office-approve-all lispm-office-inspect--key))
-        (when (and (memq 'abort (plist-get target :actions))
-                   (memq (plist-get status :state) '(working blocked thinking running)))
-          (lispm-office-inspect--button "Stop…" #'lispm-office-abort lispm-office-inspect--key))
-        (insert "\n\n")
+        (insert "\n"))
+      (lispm-office-inspect--button "‹ Back to Office" #'lispm-office-inspect-quit)
+      (when target
+        (lispm-office-inspect--button "Open Conversation" #'lispm-office-open-chat lispm-office-inspect--key))
+      (insert "\n\n")
+      (cond
+       (lispm-office-inspect--review (lispm-office-inspect--review-page))
+       ((plist-get model :error)
+        (lispm-office-inspect--heading "Conversation unavailable")
+        (lispm-office-inspect--empty (plist-get model :error)))
+       (t
         (lispm-office-inspect--tabs)
         (pcase lispm-office-inspect--tab
           ('character (lispm-office-inspect--heading "Identity")
                       (insert (or (plist-get model :character) "No character identity.") "\n"))
           ('mailbox (lispm-office-inspect--inline-mailbox (plist-get model :details)))
-          (_ (lispm-office-inspect--inline-work (plist-get model :details) target))))
+          (_ (lispm-office-inspect--inline-work (plist-get model :details) target)))))
       (add-text-properties (point-min) (point-max) '(line-prefix "  " wrap-prefix "  "))
       (unless cache-only (setq lispm-office-inspect--dirty nil))
-      (goto-char (min position (point-max))))))
+      (goto-char (min position (point-max)))
+      (dolist (entry viewports)
+        (when (window-live-p (car entry))
+          (set-window-start (car entry) (min (cdr entry) (point-max)) t))))))
 
 (defun lispm-office-inspect-compose ()
   "Compose a message to this inspector's conversation."
@@ -853,6 +999,7 @@ and buffer teardown omit it so they cannot overwrite the host's next view."
             lispm-office-inspect--owner nil
             lispm-office-inspect--key nil
             lispm-office-inspect--model nil
+            lispm-office-inspect--review nil
             lispm-office-inspect--width nil
             lispm-office-inspect--floor-state nil
             lispm-office-inspect--dirty nil)
@@ -984,6 +1131,8 @@ For callers outside Work, retain the legacy standalone Inspector API."
       (when-let* ((old (cdr (assq owner lispm-office-inspect--buffers))))
         (lispm-office-inspect--close-buffer old))
       (with-current-buffer owner
+        (unless (equal key lispm-office-inspect--key)
+          (setq lispm-office-inspect--review nil))
         (unless lispm-office-inspect--inline
           (let ((window (get-buffer-window owner t)))
             (setq lispm-office-inspect--floor-state
@@ -1053,6 +1202,7 @@ create or display an inspector."
       (unless (equal key lispm-office-inspect--key)
         (when key (lispm-office-inspect--target key))
         (setq lispm-office-inspect--key (copy-sequence key)
+              lispm-office-inspect--review nil
               lispm-office-inspect--dirty t)
         (when (lispm-office-inspect--visible-p)
           (lispm-office-inspect--draw))))))

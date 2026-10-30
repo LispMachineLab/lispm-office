@@ -7,7 +7,12 @@
 (require 'lispm-office-test
          (expand-file-name "lispm-office-test.el"
                            (file-name-directory (or load-file-name buffer-file-name))))
+(require 'lispm-office-project-test
+         (expand-file-name "lispm-office-project-test.el"
+                           (file-name-directory (or load-file-name buffer-file-name))))
 (defvar lispm-agents-show-function #'pop-to-buffer)
+(defvar lispm-chat-agent nil
+  "Current chat identity when the focused test omits the application entrypoint.")
 ;; Exercise the real public Focus predicate and keymap without loading the
 ;; application entrypoint's optional MCP/network integrations in batch tests.
 (unless (featurep 'lispm-terminal)
@@ -338,6 +343,35 @@
           (should (buffer-live-p office))
           (set-window-configuration ordinary-layout)
           (should (eq (window-buffer (selected-window)) office)))))))
+
+(ert-deftest lispm-office-focus-project-from-dedicated-sessions-uses-host-route ()
+  "The real Focus callback keeps a project out of its dedicated Sessions pane."
+  (lispm-office-project-test--isolated
+    (insert "Focus draft stays intact")
+    (let* ((side (display-buffer-in-side-window
+                  sidebar '((side . left) (slot . 0) (window-width . 12) (dedicated . t))))
+           (lispm-terminal-mode t)
+           (lispm-terminal--frame (selected-frame))
+           (lispm-terminal--listener conversation-window)
+           (lispm-chat-agent nil)
+           (lispm-agents-main-window-function #'selected-window)
+           (lispm-agents-work-display-function
+            (apply-partially #'lispm-terminal--show-in-listener #'pop-to-buffer-same-window)))
+      (set-window-parameter conversation-window 'mode-line-format 'none)
+      (select-window side)
+      (let ((office (lispm-office-open-project alpha)))
+        (should (eq (window-buffer side) sidebar))
+        (should (window-dedicated-p side))
+        (should (eq (selected-window) conversation-window))
+        (should (eq (window-buffer conversation-window) office))
+        (should (eq (buffer-local-value 'lispm-office--focus-frame office)
+                    (selected-frame)))
+        (should (eq (window-parameter conversation-window 'mode-line-format) 'none))
+        (should (= (length (window-list)) 2))
+        (lispm-office-return)
+        (should (eq (window-buffer conversation-window) source))
+        (should (equal (with-current-buffer source (buffer-string)) "Focus draft stays intact"))
+        (should (eq (window-buffer side) sidebar))))))
 
 (provide 'lispm-office-focus-test)
 ;;; lispm-office-focus-test.el ends here

@@ -42,6 +42,7 @@
 (defvar lispm-directory)
 (defvar lispm-office-mode-map)
 (defvar lispm-agents-main-window-function)
+(defvar lispm-agents-work-display-function)
 
 (defgroup lispm-office nil "Current-work visualization for LispM Agent." :group 'tools)
 
@@ -121,32 +122,46 @@ A directory view has no conversation tab or inferred conversation target."
          tabs (min (window-body-width nil (not (lispm-ui-tty-p)))
                    (lispm-ui-tabs-width (mapcar #'car tabs))))))))
 
-(defun lispm-office--restore-window (window)
-  "Restore WINDOW's conversation and its exact saved viewing position."
+(defun lispm-office--release-return-markers (saved)
+  "Release SAVED return markers, retaining positions for inactive tabs."
+  (dolist (entry '((:point . :point-position) (:start . :start-position)))
+    (let ((marker (plist-get saved (car entry))))
+      (when (and (markerp marker) (marker-position marker))
+        (setf (plist-get saved (cdr entry)) (marker-position marker))
+        (set-marker marker nil)))))
+
+(defun lispm-office--restore-window (window &optional preserve-window)
+  "Restore WINDOW's conversation and its exact saved viewing position.
+PRESERVE-WINDOW retains a host-created column when replacing one view with
+another.  Ordinary return removes a column created solely for Work unless
+it has since become the frame's only ordinary window."
   (let* ((saved (window-parameter window 'lispm-office-source))
          (source (plist-get saved :buffer))
          (point (plist-get saved :point))
          (start (plist-get saved :start)))
     (when saved
       (set-window-parameter window 'lispm-office-source nil)
-      (when (eq (window-buffer window) (plist-get saved :view))
-        (set-window-buffer window (if (buffer-live-p source) source
-                                    (other-buffer (window-buffer window) t)))
-        (when (buffer-live-p source)
-          (set-window-point window (or (and (markerp point) (marker-position point))
-                                       (plist-get saved :point-position) 1))
-          (set-window-start window (or (and (markerp start) (marker-position start))
-                                       (plist-get saved :start-position) 1) t)
-          (set-window-hscroll window (plist-get saved :hscroll))
-          (set-window-vscroll window (plist-get saved :vscroll) t)))
-      ;; Tab window configurations retain this plist.  Keep integer fallbacks
-      ;; before releasing its markers, so a later restore can recover its view.
-      (when (and (markerp point) (marker-position point))
-        (setf (plist-get saved :point-position) (marker-position point))
-        (set-marker point nil))
-      (when (and (markerp start) (marker-position start))
-        (setf (plist-get saved :start-position) (marker-position start))
-        (set-marker start nil)))))
+      (unwind-protect
+          (when (eq (window-buffer window) (plist-get saved :view))
+            (if (and (not preserve-window) (plist-get saved :new-window)
+                     (window-parent window)
+                     (not (eq window (window-main-window (window-frame window)))))
+                ;; A host may split off a session column for the project.  If
+                ;; the adjacent file pane has since closed, keep this last
+                ;; ordinary window: a sidebar alone cannot hold the frame.
+                (delete-window window)
+              (set-window-buffer window (if (buffer-live-p source) source
+                                          (other-buffer (window-buffer window) t)))
+              (when (buffer-live-p source)
+                (set-window-point window (or (and (markerp point) (marker-position point))
+                                             (plist-get saved :point-position) 1))
+                (set-window-start window (or (and (markerp start) (marker-position start))
+                                             (plist-get saved :start-position) 1) t)
+                (set-window-hscroll window (plist-get saved :hscroll))
+                (set-window-vscroll window (plist-get saved :vscroll) t))))
+        ;; Window hooks may reject restoration.  Release detached markers even
+        ;; then, retaining integer fallbacks for an inactive tab's saved plist.
+        (lispm-office--release-return-markers saved)))))
 
 (defun lispm-office-cleanup-windows (&rest _)
   "Clean up saved Work return contexts after workspace or Focus navigation.
@@ -1070,49 +1085,109 @@ In text, move through agents in their displayed order instead."
 
 (defun lispm-office--remember-window (window view)
   "Remember WINDOW's current buffer and position before displaying VIEW."
-  (lispm-office--restore-window window)
-  (let ((source (window-buffer window)))
-    (set-window-parameter
-     window 'lispm-office-source
-     (list :view view :view-name (buffer-name view) :buffer source
-           :point (with-current-buffer source (copy-marker (window-point window)))
-           :start (with-current-buffer source (copy-marker (window-start window)))
-           :point-position (window-point window) :start-position (window-start window)
-           :hscroll (window-hscroll window) :vscroll (window-vscroll window t)))))
+  (let* ((saved (window-parameter window 'lispm-office-source))
+         ;; Choosing another buffer adopts the column independently of Office.
+         ;; Carry ownership only when replacing the view that created it.
+         (new-window (and (eq (window-buffer window) (plist-get saved :view))
+                          (plist-get saved :new-window))))
+    (lispm-office--restore-window window t)
+    (let ((source (window-buffer window)))
+      (set-window-parameter
+       window 'lispm-office-source
+       (list :view view :view-name (buffer-name view) :buffer source
+             :point (with-current-buffer source (copy-marker (window-point window)))
+             :start (with-current-buffer source (copy-marker (window-start window)))
+             :point-position (window-point window) :start-position (window-start window)
+             :hscroll (window-hscroll window) :vscroll (window-vscroll window t)
+             :new-window new-window)))))
+
+(defun lispm-office--return-context (window)
+  "Snapshot WINDOW's return buffer and viewport before a host displays Work.
+An existing preview's original source remains the return target.  Positions
+are integers until the destination is known, avoiding markers in other panes."
+  (let* ((visible (window-buffer window))
+         (saved (window-parameter window 'lispm-office-source)))
+    (if (and saved (eq visible (plist-get saved :view)))
+        (list :buffer (plist-get saved :buffer)
+              :point (or (and (markerp (plist-get saved :point))
+                              (marker-position (plist-get saved :point)))
+                         (plist-get saved :point-position) 1)
+              :start (or (and (markerp (plist-get saved :start))
+                              (marker-position (plist-get saved :start)))
+                         (plist-get saved :start-position) 1)
+              :hscroll (plist-get saved :hscroll) :vscroll (plist-get saved :vscroll)
+              :new-window (plist-get saved :new-window))
+      (list :buffer visible :point (window-point window) :start (window-start window)
+            :hscroll (window-hscroll window) :vscroll (window-vscroll window t)))))
+
+(defun lispm-office--display-project (buffer)
+  "Display project BUFFER through Agent's host callback and return its window.
+Remember only the chosen destination's old contents; a file pane or dedicated
+Sessions sidebar is never selected by Office's own window policy.  Returning
+from a host-created session column removes that column again."
+  (let ((before (mapcan
+                 (lambda (frame)
+                   (mapcar (lambda (window)
+                             (list window (window-buffer window)
+                                   (lispm-office--return-context window)))
+                           (window-list frame 'no-minibuf)))
+                 (frame-list))))
+    (funcall lispm-agents-work-display-function buffer)
+    (let* ((window (if (eq (window-buffer (selected-window)) buffer)
+                       (selected-window)
+                     (get-buffer-window buffer (selected-frame))))
+           (old (assq window before)))
+      (unless (window-live-p window)
+        (user-error "The work display callback did not display the project"))
+      (unless (eq (cadr old) buffer)
+        (let* ((context (nth 2 old))
+               (source (if (buffer-live-p (plist-get context :buffer))
+                           (plist-get context :buffer) (other-buffer buffer t))))
+          ;; The callback has already replaced this window.  Release obsolete
+          ;; markers without restoring over its newly displayed Work buffer.
+          (lispm-office--release-return-markers
+           (window-parameter window 'lispm-office-source))
+          (with-current-buffer source
+            (let ((point (max (point-min) (min (point-max) (or (plist-get context :point) (point)))))
+                  (start (max (point-min) (min (point-max) (or (plist-get context :start) (point-min))))))
+              (set-window-parameter
+               window 'lispm-office-source
+               (list :view buffer :view-name (buffer-name buffer) :buffer source
+                     :point (copy-marker point) :start (copy-marker start)
+                     :point-position point :start-position start
+                     :hscroll (or (plist-get context :hscroll) 0)
+                     :vscroll (or (plist-get context :vscroll) 0)
+                     :new-window (or (null old) (plist-get context :new-window))))))))
+      window)))
 
 (defun lispm-office--show (source &optional overview directory)
   "Switch SOURCE's existing window to its work view.
-OVERVIEW shows all rooms.  DIRECTORY pins a project's current work instead.
+OVERVIEW shows all rooms.  DIRECTORY pins a project's current work and uses
+Agent's Work display callback to choose its session window instead.
 The source buffer and its input remain intact."
   (unless (require 'lispm-agents-work nil t)
     (user-error "LispM Agent 0.15.0 or later is required"))
-  (let* ((window (if (or (and (not directory) (lispm-office--source-p source))
+  (let* ((window (if (or directory (lispm-office--source-p source)
                          (not (boundp 'lispm-agents-main-window-function)))
                      (selected-window)
                    (funcall lispm-agents-main-window-function)))
          (source (if (eq (window-buffer window) source) source (window-buffer window)))
          (path (or lispm-office-seat-file
                    (expand-file-name "office-seats.eld" lispm-directory)))
-         (buffer (get-buffer-create "*LispM Office*")))
+         (buffer (get-buffer-create "*LispM Office*"))
+         (initialize (not (with-current-buffer buffer
+                            (and (derived-mode-p 'lispm-office-mode) lispm-office--seat-path)))))
     (when (eq source buffer)
       (setq source (or (plist-get (window-parameter window 'lispm-office-source) :buffer)
                        (other-buffer buffer t))))
     (with-current-buffer buffer
       (when lispm-office-inspect--inline (lispm-office-inspect-close buffer))
-      (unless (and (derived-mode-p 'lispm-office-mode) lispm-office--seat-path)
+      (when initialize
         ;; Read before initializing, so reopening after an error cannot replace
         ;; the corrupt file with an empty layout.
         (let ((state (lispm-office-layout-read path)))
           (lispm-office-mode)
-          (setq lispm-office--state state lispm-office--seat-path path
-                lispm-office--focus-frame
-                (and (fboundp 'lispm-terminal-p)
-                     (lispm-terminal-p (window-frame window))
-                     (window-frame window)))))
-      (unless (and (eq lispm-office--focus-frame (window-frame window))
-                   (fboundp 'lispm-terminal-p)
-                   (lispm-terminal-p (window-frame window)))
-        (setq lispm-office--focus-frame nil))
+          (setq lispm-office--state state lispm-office--seat-path path)))
       (setq lispm-office--source-buffer (and (not directory) (lispm-office--source-p source) source)
             lispm-office--project-root directory
             lispm-office--working-only nil
@@ -1121,8 +1196,8 @@ The source buffer and its input remain intact."
                                      (t 'all))
             lispm-office--source-key (unless directory :unresolved) lispm-office--selected nil
             lispm-office--room nil lispm-office--fit t)
-      (setq default-directory (or directory (buffer-local-value 'default-directory source)))
-      (lispm-office--observe))
+      (setq default-directory (or directory (buffer-local-value 'default-directory source))))
+    (when directory (setq window (lispm-office--display-project buffer)))
     (unless (eq (window-buffer window) buffer)
       ;; Each window returns to its own conversation, even when the work view
       ;; is shared across several agent windows.
@@ -1130,6 +1205,14 @@ The source buffer and its input remain intact."
       (set-window-buffer window buffer))
     (select-window window)
     (with-current-buffer buffer
+      (when initialize
+        (setq lispm-office--focus-frame
+              (and (fboundp 'lispm-terminal-p)
+                   (lispm-terminal-p (window-frame window)) (window-frame window))))
+      (unless (and (eq lispm-office--focus-frame (window-frame window))
+                   (fboundp 'lispm-terminal-p) (lispm-terminal-p (window-frame window)))
+        (setq lispm-office--focus-frame nil))
+      (lispm-office--observe)
       (setq-local header-line-format
                   (when lispm-office--source-buffer '((:eval (lispm-office--view-switcher)))))
       (lispm-office-refresh)
@@ -1138,13 +1221,13 @@ The source buffer and its input remain intact."
 
 ;;;###autoload
 (defun lispm-office-open-project (directory)
-  "Show active agents in DIRECTORY's project in the host's main window.
+  "Show active agents in DIRECTORY's project through the host's Work display.
 Project membership follows Agent folders, including subdirectories and
 linked worktrees.
 Called interactively, use the current working directory.  This project
 view includes idle agents and stays pinned when other conversations receive
-focus.  It has no Conversation tab; q restores the previous main-window
-buffer and its draft."
+focus.  It has no Conversation tab; q restores the previous session buffer
+and its draft, or closes a session column created for the project."
   (interactive (list default-directory))
   (unless (and (stringp directory) (not (string-empty-p directory)))
     (user-error "A project directory is required"))

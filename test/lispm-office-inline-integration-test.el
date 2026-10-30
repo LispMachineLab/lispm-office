@@ -158,7 +158,7 @@
               (plist-get (gethash "C1" pending) :turn) 8)
         (lispm-office-inspect--draw t)
         (let ((button (next-button (point-min))))
-          (while (and button (not (equal (button-get button 'lispm-ui-label) "Approve")))
+          (while (and button (not (equal (button-get button 'lispm-ui-label) "Review…")))
             (setq button (next-button (button-end button))))
           (should button)
           (should-error (button-activate button) :type 'user-error)
