@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Ryan.K
 ;; Author: Ryan.K
 ;; URL: https://github.com/LispMachineLab/lispm-office
-;; Version: 0.2.0
+;; Version: 0.2.1
 ;; Package-Requires: ((emacs "30.1") (lispm "0.15.0") (lispm-kit "0.2.0") (lispm-ui "0.6.0"))
 ;; Keywords: tools
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
