@@ -201,7 +201,7 @@ individual palettes.
 
 ## Dependency and distribution
 
-Office 0.2.0 declares LispM Agent 0.15.0, LispM UI 0.6.0, LispM Kit 0.2.0
+Office 0.2.1 declares LispM Agent 0.15.0, LispM UI 0.6.0, LispM Kit 0.2.0
 and Emacs 30.1 as its minimum versions. Agent supplies the roster and public
 project filtering and renderer hook. CI pins the precise Agent/UI revisions
 providing those APIs. Runtime checks explain a missing API. The simulated
