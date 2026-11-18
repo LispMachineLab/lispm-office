@@ -210,7 +210,23 @@ model requests, messages and permission actions must never run."
     (should (equal (lispm-office--context-key other-source) other-key))
     (should-not (lispm-office--context-key ordinary))
     (should-not (lispm-agents-running-p source))
-    (should (lispm-agents-alive-p source))))
+    (should (lispm-agents-alive-p source))
+    ;; Even when a host registers chat views as the live buffer in
+    ;; `lispm-agents-defined', context keys and inspector targets resolve
+    ;; the native agent properly.
+    (let ((lispm-agents-defined
+           `((lispm :name "LispM"
+                    :buffer-p ,(lambda (buffer)
+                                 (and (buffer-live-p buffer)
+                                      (or (and (eq (buffer-local-value 'major-mode buffer) 'lispm-chat-mode)
+                                               (buffer-local-value 'lispm-chat-agent buffer))
+                                          (when-let* ((_ (eq (buffer-local-value 'major-mode buffer) 'lispm-session-mode))
+                                                      (a (buffer-local-value 'lispm-session-agent buffer)))
+                                            (and (not (buffer-live-p (lispm-agent-view a))) a)))
+                                      t))))))
+      (setf (lispm-agent-view agent) chat)
+      (should (equal (lispm-office--context-key chat) key))
+      (should (eq (plist-get (lispm-office-inspect--target key 'approve-all) :agent) agent)))))
 
 (ert-deftest lispm-office-plugin-terminal-context-waits-for-real-session-identity ()
   (lispm-office-plugin-test--isolated
