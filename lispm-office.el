@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Ryan.K
 ;; Author: Ryan.K
 ;; URL: https://github.com/LispMachineLab/lispm-office
-;; Version: 0.2.2
+;; Version: 0.2.3
 ;; Package-Requires: ((emacs "30.1") (lispm "0.15.0") (lispm-kit "0.2.0") (lispm-ui "0.6.0"))
 ;; Keywords: tools
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -339,13 +339,37 @@ not evidence of work; this predicate never reads transcripts or processes."
          records)))
     (_ lispm-office--all-records)))
 
+(defun lispm-office--session-node-order (a b source-key)
+  "Order nodes A and B in a session room: SOURCE-KEY and roots before sub-sessions."
+  (let ((rank (lambda (node)
+                (cond ((equal (plist-get node :key) source-key) 0)
+                      ((null (plist-get node :parent)) 1)
+                      (t 2))))
+        (suffix (lambda (node)
+                  (let ((name (or (plist-get node :name) "")))
+                    (if (string-match "<\\([0-9]+\\)>\\'" name)
+                        (string-to-number (match-string 1 name))
+                      most-positive-fixnum)))))
+    (let ((ra (funcall rank a))
+          (rb (funcall rank b)))
+      (if (/= ra rb)
+          (< ra rb)
+        (let ((sa (funcall suffix a))
+              (sb (funcall suffix b)))
+          (if (/= sa sb)
+              (< sa sb)
+            (< (or (plist-get a :slot) 0) (or (plist-get b :slot) 0))))))))
+
 (defun lispm-office--scoped-plan ()
   "Make display geometry without changing global seat reservations.
 A session's collaborators share one display room, including cross-project
 requests.  Each node keeps its actual roster fields, including its project."
   (let ((plan (lispm-office-layout-plan lispm-office--state lispm-office--records)))
     (if (and (eq lispm-office--scope 'session) (plist-get plan :nodes))
-        (let* ((nodes (plist-get plan :nodes))
+        (let* ((nodes (cl-stable-sort (copy-sequence (plist-get plan :nodes))
+                                      (lambda (a b)
+                                        (lispm-office--session-node-order
+                                         a b lispm-office--source-key))))
                (source (seq-find (lambda (node)
                                    (equal lispm-office--source-key (plist-get node :key))) nodes))
                (room (copy-tree (seq-find (lambda (item)
@@ -356,6 +380,7 @@ requests.  Each node keeps its actual roster fields, including its project."
                          (plist-get node :slot) slot))
           (setf (plist-get room :label) "Session collaboration"
                 (plist-get room :nodes) nodes
+                (plist-get plan :nodes) nodes
                 (plist-get plan :rooms) (list room))
           plan)
       plan)))
