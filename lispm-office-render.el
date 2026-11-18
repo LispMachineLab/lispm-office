@@ -985,25 +985,44 @@ WORKING lights the screen and animates the typed code."
              lispm-office-render--visits)
     visitors))
 
-(defun lispm-office-render--desk-label (node)
-  "Return a compact name for NODE, preserving native session suffixes."
-  (let ((name (or (plist-get node :name) "Agent")))
-    (if (string-match "\\`\\([^@]+\\)@.*\\(<[0-9]+>\\)\\'" name)
-        (let ((role (match-string 1 name)) (suffix (match-string 2 name)))
-          (concat (truncate-string-to-width role (max 1 (- 13 (string-width suffix))) nil nil "…")
-                  " " suffix))
-      name)))
+(defun lispm-office-render--desk-label (node &optional lead-p)
+  "Return a compact name for NODE, preserving native session suffixes.
+LEAD-P marks a parent session that coordinates child sub-sessions."
+  (let ((name (or (plist-get node :name) "Agent"))
+        (sub-p (plist-get node :parent)))
+    (cond
+     ((string-match "\\`\\([^@]+\\)@.*\\(<[0-9]+>\\)\\'" name)
+      (let ((role (match-string 1 name))
+            (suffix (match-string 2 name))
+            (prefix (if sub-p "↳ " "")))
+        (concat prefix
+                (truncate-string-to-width
+                 role (max 1 (- 13 (string-width prefix) (string-width suffix))) nil nil "…")
+                " " suffix)))
+     ((string-match "\\`\\([^@]+\\)@[^<]+\\'" name)
+      (let ((role (match-string 1 name)))
+        (cond (lead-p (concat "★ " role))
+              (sub-p (concat "↳ " role))
+              ((> (string-width name) 14) role)
+              (t name))))
+     (lead-p (concat "★ " name))
+     (sub-p (concat "↳ " name))
+     (t name))))
 
-(defun lispm-office-render--desk (svg node selected level phase _scale &optional away)
-  "Draw NODE's desk on SVG, using SELECTED, LEVEL, PHASE and AWAY."
+(defun lispm-office-render--desk (svg node selected level phase _scale &optional away lead-p)
+  "Draw NODE's desk on SVG, using SELECTED, LEVEL, PHASE, AWAY and LEAD-P."
   (let* ((group (lispm-office-render--group svg "office-desk"))
          (x (plist-get node :x)) (y (plist-get node :y))
          (width (plist-get node :width)) (height (plist-get node :height))
+         (sub-p (and (plist-get node :parent) t))
          (ink "#433c36")
          (dim "#7c7062")
          (paper "#f4ead9")
+         (accent (lispm-office-render--color :accent))
          (queued (plist-get (plist-get node :mailbox) :queued)))
     (dom-set-attribute group 'data-state (symbol-name (lispm-office-render--state node)))
+    (when (or lead-p sub-p)
+      (dom-set-attribute group 'data-role (if lead-p "main" "sub")))
     (when (equal selected (plist-get node :key))
       (svg-rectangle group x y width height
                      :fill (lispm-ui-blend paper (lispm-office-render--color :focus) 0.05)
@@ -1011,13 +1030,23 @@ WORKING lights the screen and animates the typed code."
     (let ((worker (lispm-office-render--group group "office-worker")))
       (dom-set-attribute worker 'transform (format "translate(%s %s)" x y))
       (lispm-office-render--worker worker node level phase away))
+    (when lead-p
+      (svg-rectangle group (+ x 12) (+ y 54) 66 2 :fill accent))
+    (when (and (eq level 'desk) (or lead-p sub-p))
+      (svg-rectangle group (+ x 6) (+ y 4) (if lead-p 26 22) 11
+                     :fill (if lead-p accent paper)
+                     :stroke (if lead-p accent dim) :stroke-width 0.8)
+      (lispm-office-render--text group (if lead-p "MAIN" "SUB")
+                                 (+ x (if lead-p 19 17)) (+ y 12) 7
+                                 (if lead-p "#ffffff" dim) "middle" 4))
     (when (and (numberp queued) (> queued 0))
       (svg-rectangle group (+ x 69) (+ y 34) 17 12
                      :fill paper :stroke dim :stroke-width 0.8)
       (lispm-office-render--text group (format "%s" queued) (+ x 77.5) (+ y 43) 8 ink "middle" 3))
     (when (eq level 'desk)
-      (lispm-office-render--text group (lispm-office-render--desk-label node)
-                                 (+ x (/ width 2)) (+ y height -4) 10 ink "middle" 14))))
+      (lispm-office-render--text group (lispm-office-render--desk-label node lead-p)
+                                 (+ x (/ width 2)) (+ y height -4) 10
+                                 (if lead-p accent ink) "middle" 14))))
 
 (defun lispm-office-render--endpoint (endpoint nodes)
   "Find ENDPOINT by stable key or unambiguous name in NODES."
@@ -1086,10 +1115,17 @@ colours."
                        "#aaa392")
     (dolist (item rooms) (lispm-office-render--room-drawing svg item selected level actual))
     (unless (eq level 'map)
-      (dolist (node nodes)
-        (lispm-office-render--desk svg node selected level phase actual
-                                  (seq-find (lambda (actor) (equal (plist-get actor :key)
-                                                                  (plist-get node :key))) visitors)))
+      (let ((parents (make-hash-table :test #'equal)))
+        (dolist (node (plist-get plan :nodes))
+          (when-let* ((parent (plist-get node :parent)))
+            (puthash parent t parents)))
+        (dolist (node nodes)
+          (lispm-office-render--desk
+           svg node selected level phase actual
+           (seq-find (lambda (actor) (equal (plist-get actor :key)
+                                           (plist-get node :key))) visitors)
+           (and (null (plist-get node :parent))
+                (gethash (plist-get node :key) parents)))))
       (lispm-office-render--relations svg nodes events)
       (let (hits)
         (dolist (actor visitors)
@@ -1110,7 +1146,12 @@ colours."
 Desk lines carry `lispm-office-key'; headings carry `lispm-office-room'.
 No actions, data reads or timers are performed here."
   (let* ((room (lispm-office-render--room plan room-id))
-         (rooms (if room (list room) (plist-get plan :rooms))))
+         (rooms (if room (list room) (plist-get plan :rooms)))
+         (parents (let ((table (make-hash-table :test #'equal)))
+                    (dolist (node (plist-get plan :nodes))
+                      (when-let* ((parent (plist-get node :parent)))
+                        (puthash parent t table)))
+                    table)))
     (dolist (item rooms)
       (insert (propertize
                (format "%s  (%d agents)\n" (lispm-office-render--label (plist-get item :label))
@@ -1118,13 +1159,16 @@ No actions, data reads or timers are performed here."
                'face 'bold 'lispm-office-room (plist-get item :id)))
       (dolist (node (plist-get item :nodes))
         (let* ((key (plist-get node :key))
+               (lead-p (and (null (plist-get node :parent)) (gethash key parents)))
+               (sub-p (and (plist-get node :parent) t))
+               (prefix (cond (lead-p "★ ") (sub-p "↳ ") (t "")))
                (badge (lispm-office-render--badge node))
                (queued (plist-get (plist-get node :mailbox) :queued))
                (state (lispm-office-render--state node))
                (status (plist-get node :status))
                (text (format "%s %-18s [%s%s] inbox:%s%s\n"
                              (if (equal key selected) ">" " ")
-                             (lispm-office-render--label (plist-get node :name) 18)
+                             (lispm-office-render--label (concat prefix (or (plist-get node :name) "")) 18)
                              state (if badge (concat " " badge) "")
                              (if (numberp queued) queued "?")
                              (if (plist-get status :msg)

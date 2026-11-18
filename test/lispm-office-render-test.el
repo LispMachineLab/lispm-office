@@ -133,6 +133,31 @@
         (should (string-match-p (regexp-quote (cdr example)) text))
         (should-not (string-match-p "long-workspace-name" text))))))
 
+(ert-deftest lispm-office-render-distinguishes-main-and-sub-sessions ()
+  (let* ((plan (lispm-office-render-test--plan))
+         (nodes (plist-get plan :nodes))
+         (room-nodes (plist-get (car (plist-get plan :rooms)) :nodes)))
+    (dolist (pair (list (cons (nth 0 nodes) (nth 1 nodes))
+                        (cons (nth 0 room-nodes) (nth 1 room-nodes))))
+      (setf (plist-get (car pair) :name) "assistant@rings-node"
+            (plist-get (cdr pair) :name) "assistant@rings-node<2>")
+      (nconc (cdr pair) (list :parent '(lispm "a"))))
+    (let* ((svg (lispm-office-render-svg plan '(lispm "a") 1 0))
+           (desks (dom-by-class svg "office-desk"))
+           (texts (with-temp-buffer
+                    (svg-print svg)
+                    (dom-texts (car (xml-parse-region (point-min) (point-max)))))))
+      (should (equal (dom-attr (nth 0 desks) 'data-role) "main"))
+      (should (equal (dom-attr (nth 1 desks) 'data-role) "sub"))
+      (should (string-match-p "MAIN" texts))
+      (should (string-match-p "SUB" texts))
+      (should (string-match-p "★ assistant" texts))
+      (should (string-match-p "↳.*<2>" texts)))
+    (with-temp-buffer
+      (lispm-office-render-text plan '(lispm "a"))
+      (should (string-match-p "★ assistant@" (buffer-string)))
+      (should (string-match-p "↳ assistant@" (buffer-string))))))
+
 (ert-deftest lispm-office-render-worker-preserves-configured-svg-avatar ()
   (skip-unless (fboundp 'libxml-parse-xml-region))
   (let ((avatar (make-temp-file
