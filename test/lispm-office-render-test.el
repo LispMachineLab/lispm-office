@@ -390,5 +390,22 @@
             (dolist (node (plist-get room :nodes))
               (should (>= (plist-get node :y) (dom-attr floor 'y))))))))))
 
+(ert-deftest lispm-office-render-master-detail-docket-and-action-hits ()
+  "Selected desk renders a master-detail docket with clickable action buttons."
+  (let* ((plan (lispm-office-render-test--plan))
+         (svg (lispm-office-render-svg plan '(claude "b") 1.0 0 0))
+         (docket (car (dom-by-class svg "office-docket")))
+         (hits (cdr (gethash plan lispm-office-render--docket-hits))))
+    (should docket)
+    (should (equal (dom-attr docket 'data-key)
+                   (xml-escape-string (prin1-to-string '(claude "b")))))
+    (should (>= (length hits) 4))
+    (dolist (action '(approve open-chat send inspect))
+      (let ((btn (seq-find (lambda (item) (eq (plist-get item :action) action)) hits)))
+        (should btn)
+        (should (equal (lispm-office-render-hit-test
+                        plan (+ (plist-get btn :x) 4) (+ (plist-get btn :y) 4) 1.0 0)
+                       (list :action action :key '(claude "b"))))))))
+
 (provide 'lispm-office-render-test)
 ;;; lispm-office-render-test.el ends here

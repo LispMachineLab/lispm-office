@@ -1,14 +1,16 @@
 # LispM Office
 
 Office is a LispM Agent plugin that switches a conversation between Conversation
-and Work views in the same window. Work starts with the current conversation and
-its explicit collaborators. One desk represents one live conversation. LispM UI
-supplies drawing and controls; LispM Agent owns conversations, data and actions.
+and Office views in the same window. Office starts with the current conversation and
+its explicit collaborators. One desk represents one live conversation, and an inline
+master-detail docket on the floor shows the selected desk's status, live activity
+and quick actions. LispM UI supplies drawing and controls; LispM Agent owns
+conversations, data and actions.
 
 ## Plugin and current work
 
 Load `lispm-office-plugin` and enable `lispm-office-plugin-mode` to add visible
-Conversation / Work tabs to Agent chat and terminal headers. LispM UI supplies
+Conversation / Office tabs to Agent chat and terminal headers. LispM UI supplies
 its Mac OS 9 pane tabs and terminal equivalents through `lispm-ui-tabs` and
 `lispm-ui-tabs-width`. The active tab is in front; the local `C-c O`
 binding performs the same toggle. Existing header content is preserved and

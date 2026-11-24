@@ -1,4 +1,4 @@
-;;; lispm-office-plugin.el --- Work view toggle inside LispM Agent -*- lexical-binding: t; -*-
+;;; lispm-office-plugin.el --- Office view toggle inside LispM Agent -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Ryan.K
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -6,8 +6,8 @@
 ;;; Commentary:
 
 ;; Enable `lispm-office-plugin-mode', then use C-c O in an agent conversation
-;; to switch that window between conversation and work.  Session events attach the
-;; command and follow the active agent.  No polling or roster subscription is
+;; to switch that window between Conversation and Office.  Session events attach
+;; the command and follow the active agent.  No polling or roster subscription is
 ;; needed until a live panel opens.  Disabling leaves conversations running.
 
 ;;; Code:
@@ -25,17 +25,17 @@
 (defvar-local lispm-office-plugin--header nil "Header installed by this plugin.")
 
 (defcustom lispm-office-follow-current-agent t
-  "Whether an open work panel follows the selected agent conversation."
+  "Whether an open Office panel follows the selected agent conversation."
   :type 'boolean :group 'lispm-office)
 
 (defvar lispm-office-agent-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c O") #'lispm-office-toggle)
     map)
-  "Work visualization commands in agent conversation buffers.")
+  "Office visualization commands in agent conversation buffers.")
 
 (define-minor-mode lispm-office-agent-mode
-  "Provide the Conversation / Work toggle in this agent conversation."
+  "Provide the Conversation / Office toggle in this agent conversation."
   :lighter nil :keymap lispm-office-agent-mode-map :group 'lispm-office
   (if lispm-office-agent-mode
       (unless lispm-office-plugin--header
@@ -52,8 +52,8 @@
     (setq lispm-office-plugin--header nil lispm-office-plugin--saved-header nil)))
 
 (easy-menu-define lispm-office-agent-menu lispm-office-agent-mode-map
-  "Agent work visualization."
-  '("Agent Work" ["Toggle Current Work" lispm-office-toggle t]))
+  "Agent Office visualization."
+  '("Office" ["Toggle Office" lispm-office-toggle t]))
 
 (defun lispm-office-plugin--attach ()
   "Attach visualization commands to the current agent buffer."
@@ -99,8 +99,8 @@ Global window hooks pass a frame; local invocations can pass a window."
 
 ;;;###autoload
 (define-minor-mode lispm-office-plugin-mode
-  "Integrate the current-work visualization into LispM Agent sessions.
-Use the Conversation / Work control or C-c O to switch the current window.
+  "Integrate the Office visualization into LispM Agent sessions.
+Use the Conversation / Office control or C-c O to switch the current window.
 Disabling closes all panels, previews and inspectors; sessions stay intact."
   :global t :group 'lispm-office
   (if (not lispm-office-plugin-mode)

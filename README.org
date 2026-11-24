@@ -1,17 +1,18 @@
 #+title: LispM Office
 
-A LispM Agent plugin that adds a Work view to your current conversation and its
-explicit collaborators. Each conversation has a desk, and an in-page view shows its
-current work and mailbox. LispM UI draws the controls and view
+A LispM Agent plugin that adds an Office view to your current conversation and its
+explicit collaborators. Each conversation has a desk, a master-detail docket on the
+floor summarizes the selected desk's live status and actions, and an in-page detail
+sheet shows its full activity and mailbox. LispM UI draws the controls and view
 in graphical Emacs and on a text terminal.
 
 * Using it
 
-Enable the plugin, then click the =Conversation= or =Work= tab in the agent's header.
+Enable the plugin, then click the =Conversation= or =Office= tab in the agent's header.
 LispM UI draws these with its shared Mac OS 9 tab control.
 =C-c O= performs the same toggle in the same window. Returning to Conversation
 restores the source buffer, draft, point and scroll position; the agent keeps
-running throughout. =q= in Work also returns to the conversation.
+running throughout. =q= in Office also returns to the conversation.
 
 In Focus Mode, Work stays in the listener beside the Sessions list. Focus's
 =C-c C-n=, =C-c C-p= and =C-c C-q= commands also work from Work and its details;
@@ -46,8 +47,13 @@ alone do not add ancestors, and linked peers do not bring unrelated children.
 Cross-project collaborators share the session's display room. Project and All projects group
 desks by project; these display choices never alter saved global seats.
 
-Click a desk or press =RET= to show that Agent's details in the same Work buffer.
-A compact centered name, pixel portrait and status sit above the
+Click an unselected desk to select it and update the inline master-detail docket at the
+bottom of the room; click the selected desk again (or click =Details= in the docket, or
+press =RET=) to open that Agent's full detail sheet in the same Office buffer.
+The master-detail docket shows the selected agent's pixel portrait, role, status pill,
+live activity summary, inbox count, and direct =Chat=, =Message=, =Approve= (when blocked
+on a permission) and =Details= action buttons.
+In the full detail sheet, a compact centered name, pixel portrait and status sit above the
 =Back to Office= and =Open Conversation= controls. Adjacent native =Activity=
 and =Messages= tabs organize the details; =Identity= appears only for an agent
 with a character. Messages distinguish the request being handled from its queue.
