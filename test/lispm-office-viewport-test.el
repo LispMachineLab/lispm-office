@@ -83,7 +83,7 @@
           ;; Exercise both initial overview navigation and manually
           ;; zooming a focused room out to its room-count tile.
           (setq lispm-office--room initial-room lispm-office--scale 0.25
-                lispm-office--fit nil inspected nil)
+                lispm-office--fit nil inspected nil lispm-office--selected '(lispm "ada"))
           (let* ((scene (lispm-office--scene-plan))
                  (display-node (seq-find (lambda (item)
                                            (equal (plist-get item :key) (plist-get node :key)))
@@ -99,8 +99,11 @@
                                          (plist-get scene :nodes))))
             (setq position (lispm-office-viewport-test--desk-position
                             display-node scene lispm-office--scale room-id)))
-          ;; A second click reaches an agent; it must not re-enter the
-          ;; same map tile forever after Fit recomputes the same low scale.
+          ;; A second click selects the desk and updates the inline docket;
+          ;; clicking the selected desk again opens its full detail page.
+          (lispm-office-mouse (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+          (should (equal lispm-office--selected (plist-get node :key)))
+          (should-not inspected)
           (lispm-office-mouse (list 'mouse-1 (list window 1 '(0 . 0) 0)))
           (should (equal inspected (plist-get node :key))))))))
 
@@ -158,7 +161,10 @@
             (setq position (lispm-office-viewport-test--desk-position
                             third scene lispm-office--scale 0))
             (when last-position (should-not (equal position last-position)))
-            (setq last-position position inspected nil)
+            (setq last-position position inspected nil lispm-office--selected '(claude "grace"))
+            (lispm-office-mouse (list 'mouse-1 (list (selected-window) lispm-office--floor-start '(0 . 0) 0)))
+            (should (equal lispm-office--selected target-key))
+            (should-not inspected)
             (lispm-office-mouse (list 'mouse-1 (list (selected-window) lispm-office--floor-start '(0 . 0) 0)))
             (should (equal inspected target-key))))))))
 

@@ -24,6 +24,12 @@
 (defconst lispm-office-layout--file-limit (* 4 1024 1024)
   "Maximum number of bytes read from a saved seating file.")
 
+(define-error 'lispm-office-layout-error "Office layout error")
+
+(defun lispm-office-layout--fail (format-string &rest args)
+  "Signal a structured `lispm-office-layout-error' with FORMAT-STRING and ARGS."
+  (signal 'lispm-office-layout-error (list (apply #'format format-string args))))
+
 (defun lispm-office-layout--key-p (key)
   "Return non-nil if KEY is a persistent (KIND SESSION-ID) identity."
   (and (proper-list-p key) (= (length key) 2)
@@ -35,7 +41,7 @@
 A missing root denotes Home.  Remote paths are kept remote and no
 connection is opened merely to lay out their rooms."
   (unless (or (null root) (and (stringp root) (not (string-empty-p root))))
-    (error "Invalid Office project root: %S" root))
+    (lispm-office-layout--fail "Invalid Office project root: %S" root))
   (file-name-as-directory (expand-file-name (or root "~"))))
 
 (defun lispm-office-layout--plist-p (value keys)
@@ -53,7 +59,7 @@ connection is opened merely to lay out their rooms."
                (eql (plist-get state :version) 1)
                (proper-list-p (plist-get state :rooms))
                (proper-list-p (plist-get state :seats)))
-    (error "Invalid Office seating database or unsupported version"))
+    (lispm-office-layout--fail "Invalid Office seating database or unsupported version"))
   (let ((rooms (make-hash-table :test #'eql))
         (keys (make-hash-table :test #'equal))
         (occupied (make-hash-table :test #'equal))
@@ -70,7 +76,7 @@ connection is opened merely to lay out their rooms."
                    (eql (plist-get room :y) (+ 16 (* (/ index 3) 478)))
                    (eql (plist-get room :width) lispm-office-layout--room-width)
                    (eql (plist-get room :height) lispm-office-layout--room-height))
-        (error "Invalid Office room %S" index))
+        (lispm-office-layout--fail "Invalid Office room %S" index))
       (puthash index room rooms)
       (setq index (1+ index)))
     (dolist (entry (plist-get state :seats))
@@ -82,11 +88,11 @@ connection is opened merely to lay out their rooms."
                    (integerp (plist-get (cdr entry) :slot))
                    (<= 0 (plist-get (cdr entry) :slot))
                    (< (plist-get (cdr entry) :slot) 16))
-        (error "Invalid or duplicate Office seat identity: %S" (car-safe entry)))
+        (lispm-office-layout--fail "Invalid or duplicate Office seat identity: %S" (car-safe entry)))
       (let ((position (list (plist-get (cdr entry) :room)
                             (plist-get (cdr entry) :slot))))
         (when (gethash position occupied)
-          (error "Several Office agents occupy seat %S" position))
+          (lispm-office-layout--fail "Several Office agents occupy seat %S" position))
         (puthash position t occupied))
       (puthash (car entry) t keys)))
   state)
@@ -94,15 +100,16 @@ connection is opened merely to lay out their rooms."
 (defun lispm-office-layout--records (records)
   "Index RECORDS by stable key, rejecting ambiguous identities.
 Fresh terminals without a key are omitted.  No input record is changed."
-  (unless (proper-list-p records) (error "Invalid Office roster"))
+  (unless (proper-list-p records) (lispm-office-layout--fail "Invalid Office roster"))
   (let ((index (make-hash-table :test #'equal)))
     (dolist (record records)
       (unless (and (proper-list-p record) (zerop (% (length record) 2)))
-        (error "Invalid Office roster record"))
+        (lispm-office-layout--fail "Invalid Office roster record"))
       (when-let* ((key (plist-get record :key)))
         (unless (lispm-office-layout--key-p key)
-          (error "Invalid Office agent identity: %S" key))
-        (when (gethash key index) (error "Duplicate Office agent identity: %S" key))
+          (lispm-office-layout--fail "Invalid Office agent identity: %S" key))
+        (when (gethash key index)
+          (lispm-office-layout--fail "Duplicate Office agent identity: %S" key))
         (lispm-office-layout--root (plist-get record :root))
         (puthash key record index)))
     index))
@@ -115,6 +122,22 @@ Fresh terminals without a key are omitted.  No input record is changed."
     (list :id id :root root :label (if (zerop annex) name (format "%s (%d)" name (1+ annex)))
           :x (+ 16 (* (% id 3) 474)) :y (+ 16 (* (/ id 3) 478))
           :width lispm-office-layout--room-width :height lispm-office-layout--room-height)))
+
+(defun lispm-office-layout--free-slot (occupied room &optional pod)
+  "Return the first free slot index in OCCUPIED for ROOM and optional POD."
+  (let ((used (gethash (plist-get room :id) occupied)))
+    (seq-find (lambda (slot) (not (aref used slot)))
+              (if pod (number-sequence (* pod 4) (+ (* pod 4) 3))
+                (number-sequence 0 15)))))
+
+(defun lispm-office-layout--same-root-parent (record records-by-key)
+  "Return RECORD's parent key when present in RECORDS-BY-KEY at the same root."
+  (let* ((key (plist-get record :parent))
+         (parent (and (lispm-office-layout--key-p key) (gethash key records-by-key))))
+    (and parent
+         (equal (lispm-office-layout--root (plist-get parent :root))
+                (lispm-office-layout--root (plist-get record :root)))
+         key)))
 
 (defun lispm-office-layout-reconcile (state records)
   "Return STATE with stable seats allocated for RECORDS.
@@ -132,9 +155,7 @@ are broken deterministically without recursion."
          (seats (make-hash-table :test #'equal))
          (occupied (make-hash-table :test #'eql))
          (visiting (make-hash-table :test #'equal))
-         (new-seats nil)
-         (next-room (length rooms))
-         (ordered nil))
+         (new-seats nil) (next-room (length rooms)) (ordered nil))
     (dolist (room rooms)
       (puthash (plist-get room :id) room room-index)
       (puthash (plist-get room :id) (make-vector 16 nil) occupied)
@@ -144,66 +165,47 @@ are broken deterministically without recursion."
       (let* ((key (car entry)) (seat (cdr entry))
              (record (gethash key records-by-key))
              (room (gethash (plist-get seat :room) room-index)))
-        (unless (and record
-                     (not (equal (plist-get room :root)
-                                 (lispm-office-layout--root (plist-get record :root)))))
+        (unless (and record (not (equal (plist-get room :root)
+                                        (lispm-office-layout--root (plist-get record :root)))))
           (puthash key seat seats)
           (aset (gethash (plist-get seat :room) occupied) (plist-get seat :slot) t)
           (push entry new-seats))))
     (maphash (lambda (key _record) (push key ordered)) records-by-key)
     (setq ordered (sort ordered (lambda (a b) (string< (prin1-to-string a) (prin1-to-string b)))))
     (cl-labels
-        ((parent-key
-          (record)
-          (let* ((key (plist-get record :parent))
-                 (parent (and (lispm-office-layout--key-p key) (gethash key records-by-key))))
-            (and parent
-                 (equal (lispm-office-layout--root (plist-get parent :root))
-                        (lispm-office-layout--root (plist-get record :root)))
-                 key)))
-         (free-slot
-          (room &optional pod)
-          (let ((used (gethash (plist-get room :id) occupied)))
-            (seq-find (lambda (slot) (not (aref used slot)))
-                      (if pod (number-sequence (* pod 4) (+ (* pod 4) 3))
-                        (number-sequence 0 15)))))
-         (allocate
-          (key)
-          (let* ((record (gethash key records-by-key))
-                 (root (lispm-office-layout--root (plist-get record :root)))
-                 (parent-seat (gethash (plist-get record :parent) seats))
-                 (parent-room (and parent-seat (gethash (plist-get parent-seat :room) room-index)))
-                 (room nil) (slot nil))
-            (when (and parent-room (equal root (plist-get parent-room :root)))
-              (setq slot (or (free-slot parent-room (/ (plist-get parent-seat :slot) 4))
-                             (free-slot parent-room)))
-              (when slot (setq room parent-room)))
-            (unless room
-              (dolist (candidate (gethash root root-index))
-                (unless room
-                  (when-let* ((available (free-slot candidate)))
-                    (setq room candidate slot available)))))
-            (unless room
-              (setq room (lispm-office-layout--room root next-room (length (gethash root root-index)))
-                    slot 0 next-room (1+ next-room))
-              (puthash (plist-get room :id) room room-index)
-              (puthash (plist-get room :id) (make-vector 16 nil) occupied)
-              (puthash root (append (gethash root root-index) (list room)) root-index)
-              (setq rooms (append rooms (list room))))
-            (let ((seat (list :room (plist-get room :id) :slot slot)))
-              (puthash key seat seats)
-              (aset (gethash (plist-get room :id) occupied) slot t)
-              (push (cons (copy-tree key) seat) new-seats)))))
+        ((allocate (key)
+           (let* ((record (gethash key records-by-key))
+                  (root (lispm-office-layout--root (plist-get record :root)))
+                  (parent-seat (gethash (plist-get record :parent) seats))
+                  (parent-room (and parent-seat (gethash (plist-get parent-seat :room) room-index)))
+                  (room nil) (slot nil))
+             (when (and parent-room (equal root (plist-get parent-room :root)))
+               (setq slot (or (lispm-office-layout--free-slot occupied parent-room (/ (plist-get parent-seat :slot) 4))
+                              (lispm-office-layout--free-slot occupied parent-room)))
+               (when slot (setq room parent-room)))
+             (unless room
+               (dolist (candidate (gethash root root-index))
+                 (unless room
+                   (when-let* ((available (lispm-office-layout--free-slot occupied candidate)))
+                     (setq room candidate slot available)))))
+             (unless room
+               (setq room (lispm-office-layout--room root next-room (length (gethash root root-index)))
+                     slot 0 next-room (1+ next-room))
+               (puthash (plist-get room :id) room room-index)
+               (puthash (plist-get room :id) (make-vector 16 nil) occupied)
+               (puthash root (append (gethash root root-index) (list room)) root-index)
+               (setq rooms (append rooms (list room))))
+             (let ((seat (list :room (plist-get room :id) :slot slot)))
+               (puthash key seat seats)
+               (aset (gethash (plist-get room :id) occupied) slot t)
+               (push (cons (copy-tree key) seat) new-seats)))))
       (dolist (key ordered)
         (unless (gethash key seats)
           (let ((current key) (stack nil))
             (while (and current (not (gethash current seats)) (not (gethash current visiting)))
-              (puthash current t visiting)
-              (push current stack)
-              (setq current (parent-key (gethash current records-by-key))))
-            (dolist (pending stack)
-              (allocate pending)
-              (remhash pending visiting))))))
+              (puthash current t visiting) (push current stack)
+              (setq current (lispm-office-layout--same-root-parent (gethash current records-by-key) records-by-key)))
+            (dolist (pending stack) (allocate pending) (remhash pending visiting))))))
     (list :version 1 :rooms rooms :seats (nreverse new-seats))))
 
 (defun lispm-office-layout-compact (_state records)
@@ -217,6 +219,10 @@ Unlike ordinary reconciliation, this deliberately moves existing desks."
        (< (plist-get b :x) (+ (plist-get a :x) (plist-get a :width)))
        (< (plist-get a :y) (+ (plist-get b :y) (plist-get b :height)))
        (< (plist-get b :y) (+ (plist-get a :y) (plist-get a :height)))))
+
+(defun lispm-office-layout--put-tail (plist prop val)
+  "Set PROP to VAL on non-empty copied node PLIST in place."
+  (plist-put plist prop val))
 
 (defun lispm-office-layout--decorate-room (room &optional service)
   "Add furniture and circulation geometry to a copied ROOM.
@@ -235,18 +241,16 @@ anchors are (X . Y) world coordinates; walk anchors locate feet."
                                    :width 88 :height 18)))
          (aisles nil) (pods nil))
     (dolist (node nodes)
-      ;; Retain the shared node object held by the plan and its room.
-      (dolist (property '(:desk-anchor :walk-anchor :idle-anchor))
-        (unless (plist-member node property) (nconc node (list property nil))))
       (let* ((nx (plist-get node :x)) (ny (plist-get node :y))
              (walk (cons (+ nx (/ (plist-get node :width) 2.0))
                          (+ ny (plist-get node :height) walk-gap))))
-        (setf (plist-get node :desk-anchor) (cons nx ny)
-              (plist-get node :walk-anchor) walk
-              (plist-get node :idle-anchor)
-              (cons (+ (plist-get coffee :x) 12
-                       (* (or (plist-get node :display-seat) (% (or (plist-get node :slot) 0) 4)) 16))
-                    (+ (plist-get coffee :y) (plist-get coffee :height) -4)))
+        (lispm-office-layout--put-tail node :desk-anchor (cons nx ny))
+        (lispm-office-layout--put-tail node :walk-anchor walk)
+        (lispm-office-layout--put-tail
+         node :idle-anchor
+         (cons (+ (plist-get coffee :x) 12
+                  (* (or (plist-get node :display-seat) (% (or (plist-get node :slot) 0) 4)) 16))
+               (+ (plist-get coffee :y) (plist-get coffee :height) -4)))
         (push node (gethash (or (plist-get node :display-pod) (/ (or (plist-get node :slot) 0) 4)) groups))
         (let ((line (seq-find (lambda (aisle) (= (plist-get aisle :y) (- (cdr walk) 4))) aisles)))
           (if line
@@ -297,10 +301,8 @@ historical reservations in the display.  Saved slots are never changed."
          (pixels-wide (max (float width) (* 0.72 (+ dw 64))))
          (best nil) (score -1.0))
     (cl-loop for node in nodes for index from 0 do
-             (dolist (property '(:display-pod :display-seat))
-               (unless (plist-member node property) (nconc node (list property nil))))
-             (setf (plist-get node :display-pod) (/ index 4)
-                   (plist-get node :display-seat) (% index 4))
+             (lispm-office-layout--put-tail node :display-pod (/ index 4))
+             (lispm-office-layout--put-tail node :display-seat (% index 4))
              (let* ((pod (/ index 4)) (group (assq pod groups)))
                (if group (setcdr group (append (cdr group) (list node)))
                  (setq groups (append groups (list (list pod node)))))))
@@ -486,7 +488,7 @@ replace that file with an empty layout.  No Lisp forms are evaluated."
     (condition-case err
         (progn
           (when (> (file-attribute-size (file-attributes file)) lispm-office-layout--file-limit)
-            (error "Office seating file exceeds the size limit"))
+            (lispm-office-layout--fail "Office seating file exceeds the size limit"))
           (with-temp-buffer
             (insert-file-contents file)
             (let* ((read-circle nil)
@@ -495,9 +497,10 @@ replace that file with an empty layout.  No Lisp forms are evaluated."
               (while (eq (char-after) ?\;)
                 (forward-line 1)
                 (skip-chars-forward " \t\r\n"))
-              (unless (eobp) (error "Trailing data in Office seating file"))
+              (unless (eobp) (lispm-office-layout--fail "Trailing data in Office seating file"))
               (lispm-office-layout--validate state))))
-      (error (error "Cannot read Office seats from %s: %s" file (error-message-string err))))))
+      (error (lispm-office-layout--fail "Cannot read Office seats from %s: %s"
+                                        file (error-message-string err))))))
 
 (defun lispm-office-layout-write (state file)
   "Atomically write validated STATE to FILE, preserving any corrupt file.
@@ -519,7 +522,7 @@ file is private and is removed even if writing or renaming fails."
               (prin1 state (current-buffer))
               (insert "\n")
               (when (> (string-bytes (buffer-string)) lispm-office-layout--file-limit)
-                (error "Office seating data exceeds the size limit"))))
+                (lispm-office-layout--fail "Office seating data exceeds the size limit"))))
           (rename-file temporary file t)
           (setq temporary nil))
       (when (and temporary (file-exists-p temporary)) (delete-file temporary))))
