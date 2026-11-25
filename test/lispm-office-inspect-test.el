@@ -739,7 +739,7 @@
 
 (ert-deftest lispm-office-inspect-deny-revalidates-after-reason ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (setq live nil) "No")))
+    (cl-letf (((symbol-function 'lispm-ui-read-string) (lambda (&rest _) (setq live nil) "No")))
       (should-error (lispm-office-deny key "C1") :type 'user-error))
     (should-not denied)))
 
