@@ -1,5 +1,11 @@
 #+title: LispM Office
 
+*Note: This repository is archived.* LispM Office has been refactored and built directly into upstream LispMachineLab repositories:
+
+- Reusable 2D pixel scene/sprite canvas and side-sheet UI primitives now live in [[https://github.com/LispMachineLab/lispm-ui][LispM UI]] (~v0.13.0+~: ~lispm-ui-scene~, ~lispm-ui-scene-layout~, ~lispm-ui-scene-sprites~, ~lispm-ui-sheet~).
+- Built-in Office view, scope, actions, and inspector now live in [[https://github.com/LispMachineLab/lispm-agent][LispM Agent]] (~v0.23.0+~: ~lispm-office~, ~lispm-office-scope~, ~lispm-office-actions~, ~lispm-office-inspect~), enabled by default and toggleable via ~M-x lispm-office-toggle~.
+- [[https://github.com/LispMachineLab/lispm-desktop][LispM Desktop]] (~v0.26.0+~) bundles ~lispm-ui~ ~0.13.0+~ and ~lispm~ ~0.23.0+~ out of the box without installing a separate store extension.
+
 A LispM Agent plugin that adds an Office view to your current conversation and its
 explicit collaborators. Each conversation has a desk, a master-detail docket on the
 floor summarizes the selected desk's live status and actions, and an in-page detail
