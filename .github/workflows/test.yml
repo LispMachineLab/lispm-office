@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: LispMachineLab/lispm-ui
-          ref: 5b934ab4f1b9f19af994a73c378e5e58d1a135e8
+          ref: 10055f93b1d88f8d832e446443a63dfbc4d6a146
           path: .deps/lispm-ui
       - uses: actions/checkout@v7
         with:

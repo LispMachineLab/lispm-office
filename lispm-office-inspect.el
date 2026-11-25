@@ -8,12 +8,12 @@
 ;; One inspector belongs to one Office buffer.  Details are read only
 ;; for the selected conversation; actions resolve its stable key again.
 ;; A permission preview is tied to the agent, turn, call and arguments
-;; that were shown, including while a minibuffer is reading an answer.
+;; that were shown, including while a prompt is reading an answer.
 
 ;;; Code:
 
 (require 'cl-lib) (require 'seq) (require 'subr-x) (require 'button) (require 'pp)
-(require 'lispm-kit-commands) (require 'lispm-ui-controls) (require 'lispm-office-details)
+(require 'lispm-kit-commands) (require 'lispm-ui-controls) (require 'lispm-ui-ask) (require 'lispm-office-details)
 
 (declare-function lispm-agents-roster-buffer "lispm-agents-roster" (key)) (declare-function lispm-agents-roster-details "lispm-inspect" (key))
 (declare-function lispm-agents-buffer-status "lispm-agents" (buffer)) (declare-function lispm-agents-buffer-label "lispm-agents" (buffer))
@@ -280,10 +280,9 @@ When EXACT, reject any addition or removal of current permissions."
     (or (if id (assoc id calls)
           (if (null (cdr calls)) (car calls)
             (let* ((choices (mapcar (lambda (entry)
-                                      (cons (format "%s: %s" (car entry) (plist-get (lispm-asked (cadr entry)) :name))
-                                            entry)) calls))
-                   (answer (completing-read "Permission: " choices nil t)))
-              (cdr (assoc answer choices)))))
+                                      (cons entry (format "%s: %s" (car entry) (plist-get (lispm-asked (cadr entry)) :name)))) calls))
+                   (chosen (lispm-ui-choose choices nil nil "Permission")))
+              (if chosen (car chosen) (signal 'quit nil)))))
         (user-error "That permission is no longer pending"))))
 (defun lispm-office-approve (key &optional call-id)
   "Approve one pending permission CALL-ID of conversation KEY."
@@ -299,7 +298,7 @@ When EXACT, reject any addition or removal of current permissions."
   (let* ((target (lispm-office-inspect--target key 'deny))
          (agent (plist-get target :agent)) (turn (lispm-agent-turn agent))
          (call (lispm-office-inspect--choose-permission target call-id))
-         (reason (read-string "Reason (optional): ")))
+         (reason (lispm-ui-read-string "Reason (optional): ")))
     (lispm-office-inspect--validate-permissions target turn (list call))
     (lispm-deny-for agent reason (car call))))
 (defun lispm-office-approve-all (key)
@@ -393,17 +392,17 @@ now so later runtime mutations cannot change the action the user reviewed."
                                 (pp-to-string (plist-get asked :input))))))
             (special-mode) (goto-char (point-min)))
           (display-buffer preview)
-          (yes-or-no-p
-           (format "Approve these %d calls for %s, turn %s: %s? " (length calls) (plist-get target :name) turn
+          (lispm-ui-confirm
+           (format "Approve these %d calls for %s, turn %s: %s?" (length calls) (plist-get target :name) turn
                    (mapconcat (lambda (entry)
                                 (format "%s (%s)" (car entry) (plist-get (lispm-asked (cadr entry)) :name)))
-                              calls ", "))))
+                              calls ", ")) nil "Approve All"))
       (when (buffer-live-p preview) (kill-buffer preview)))))
 (defun lispm-office-abort (key)
   "Stop KEY's current turn, after explaining that queued inputs are cleared."
   (let* ((target (lispm-office-inspect--target key 'abort))
          (agent (plist-get target :agent)) (turn (lispm-agent-turn agent)))
-    (when (yes-or-no-p (format "Stop %s's current turn and clear all its queued inputs? " (plist-get target :name)))
+    (when (lispm-ui-confirm (format "Stop %s's current turn and clear all its queued inputs?" (plist-get target :name)) nil "Stop")
       (lispm-office-inspect--same-target target 'abort)
       (unless (eql turn (lispm-agent-turn agent))
         (user-error "A different turn has started; inspect it again"))
@@ -754,7 +753,7 @@ a new call that happens to reuse the old call's id."
   (interactive)
   (let* ((key (copy-sequence lispm-office-inspect--key))
          (target (lispm-office-inspect--target key 'send))
-         (text (read-string (format "Message to %s: " (plist-get target :name)))))
+         (text (lispm-ui-read-string (format "Message to %s: " (plist-get target :name)))))
     (lispm-office-inspect--same-target target 'send)
     (lispm-office-send key text)
     (lispm-office-inspect--draw)))

@@ -3,8 +3,8 @@
 ;; Copyright (C) 2026 Ryan.K
 ;; Author: Ryan.K
 ;; URL: https://github.com/LispMachineLab/lispm-office
-;; Version: 0.2.4
-;; Package-Requires: ((emacs "30.1") (lispm "0.15.0") (lispm-ui "0.8.0"))
+;; Version: 0.2.5
+;; Package-Requires: ((emacs "30.1") (lispm "0.15.0") (lispm-ui "0.12.0"))
 ;; Keywords: tools
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -645,7 +645,7 @@ positions and hit regions remain current."
 (defun lispm-office-message ()
   "Compose a message to the selected agent."
   (interactive)
-  (let* ((key (lispm-office--key)) (text (read-string "Message to agent: ")))
+  (let* ((key (lispm-office--key)) (text (lispm-ui-read-string "Message to agent: ")))
     (unless (string-blank-p text) (lispm-office-send key text))))
 (defun lispm-office-approve-selected () "Review and approve a pending call." (interactive) (lispm-office-approve (lispm-office--key)))
 (defun lispm-office-approve-all-selected () "Preview and approve this agent's pending calls." (interactive) (lispm-office-approve-all (lispm-office--key)))
@@ -747,10 +747,10 @@ Details control opens its full activity and mailbox page."
 (defun lispm-office-choose-room ()
   "Choose a project room from the keyboard."
   (interactive)
-  (let* ((choices (mapcar (lambda (room) (cons (format "%s [%s]" (plist-get room :label) (plist-get room :id)) (plist-get room :id)))
+  (let* ((choices (mapcar (lambda (room) (cons (plist-get room :id) (format "%s [%s]" (plist-get room :label) (plist-get room :id))))
                           (plist-get lispm-office--plan :rooms)))
-         (choice (and choices (completing-read "Room: " choices nil t))))
-    (when choice (setq lispm-office--room (cdr (assoc choice choices))) (lispm-office-fit))))
+         (chosen (and choices (lispm-ui-choose choices lispm-office--room nil "Room"))))
+    (when chosen (setq lispm-office--room (car chosen)) (lispm-office-fit))))
 (defun lispm-office-compact ()
   "Confirm removing empty seats and repacking the occupied office."
   (interactive)
@@ -933,7 +933,7 @@ show the overview.  Toggle back with C-c O or the Conversation control."
 ;;;###autoload
 (defun lispm-office-demo (&optional count)
   "Preview COUNT simulated agents, default twelve, without side effects."
-  (interactive (list (if current-prefix-arg (read-number "Preview agent count: " 40) 12)))
+  (interactive (list (if current-prefix-arg (lispm-ui-read-number "Preview agent count: " 40) 12)))
   (require 'lispm-office-demo)
   (let ((buffer (get-buffer-create "*LispM Office Preview*")))
     (with-current-buffer buffer
