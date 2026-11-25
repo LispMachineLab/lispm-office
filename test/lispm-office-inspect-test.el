@@ -699,41 +699,41 @@
 (ert-deftest lispm-office-inspect-approve-all-shows-selected-turn ()
   (lispm-office-inspect-test--with-agent
     (let (preview)
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (question) (setq preview question) t)))
+      (cl-letf (((symbol-function 'lispm-ui-confirm) (lambda (question &rest _) (setq preview question) t)))
         (lispm-office-approve-all key))
       (should (string-match-p "ada, turn 7: C1 (read-file)" preview))
       (should (equal approved (list (list agent 'all)))))))
 
 (ert-deftest lispm-office-inspect-approve-all-rejects-later-turn ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) (setf (plist-get agent :turn) 8) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm) (lambda (&rest _) (setf (plist-get agent :turn) 8) t)))
       (should-error (lispm-office-approve-all key) :type 'user-error))
     (should-not approved)))
 
 (ert-deftest lispm-office-inspect-approve-all-rejects-new-permission ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p)
-               (lambda (_) (puthash "C2" (list :status 'ask :turn 7 :name "shell" :input '(:command "new")) pending) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm)
+               (lambda (&rest _) (puthash "C2" (list :status 'ask :turn 7 :name "shell" :input '(:command "new")) pending) t)))
       (should-error (lispm-office-approve-all key) :type 'user-error))
     (should-not approved)))
 
 (ert-deftest lispm-office-inspect-approve-all-rejects-reused-id ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) (puthash "C1" (copy-tree (gethash "C1" pending)) pending) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm) (lambda (&rest _) (puthash "C1" (copy-tree (gethash "C1" pending)) pending) t)))
       (should-error (lispm-office-approve-all key) :type 'user-error))
     (should-not approved)))
 
 (ert-deftest lispm-office-inspect-approve-all-rejects-mutated-input ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p)
-               (lambda (_) (setf (plist-get (gethash "C1" pending) :input) '(:path "/private/new")) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm)
+               (lambda (&rest _) (setf (plist-get (gethash "C1" pending) :input) '(:path "/private/new")) t)))
       (should-error (lispm-office-approve-all key) :type 'user-error))
     (should-not approved)))
 
 (ert-deftest lispm-office-inspect-approve-all-rejects-replaced-agent ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p)
-               (lambda (_) (with-current-buffer source (setq-local lispm-session-agent (copy-sequence agent))) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm)
+               (lambda (&rest _) (with-current-buffer source (setq-local lispm-session-agent (copy-sequence agent))) t)))
       (should-error (lispm-office-approve-all key) :type 'user-error))
     (should-not approved)))
 
@@ -746,14 +746,14 @@
 (ert-deftest lispm-office-inspect-stop-discloses-cleared-queue ()
   (lispm-office-inspect-test--with-agent
     (let (preview)
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (text) (setq preview text) t)))
+      (cl-letf (((symbol-function 'lispm-ui-confirm) (lambda (text &rest _) (setq preview text) t)))
         (lispm-office-abort key))
       (should (string-match-p "clear all its queued inputs" preview))
       (should (eq stopped agent)))))
 
 (ert-deftest lispm-office-inspect-stop-rejects-new-turn ()
   (lispm-office-inspect-test--with-agent
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) (setf (plist-get agent :turn) 8) t)))
+    (cl-letf (((symbol-function 'lispm-ui-confirm) (lambda (&rest _) (setf (plist-get agent :turn) 8) t)))
       (should-error (lispm-office-abort key) :type 'user-error))
     (should-not stopped)))
 
@@ -855,8 +855,8 @@
 (ert-deftest lispm-office-inspect-all-preview-contains-full-input ()
   (lispm-office-inspect-test--with-agent
     (let (shown)
-      (cl-letf (((symbol-function 'yes-or-no-p)
-                 (lambda (_)
+      (cl-letf (((symbol-function 'lispm-ui-confirm)
+                 (lambda (&rest _)
                    (let ((buffer (seq-find (lambda (buffer)
                                              (string-prefix-p "*Office Permission Preview*" (buffer-name buffer)))
                                            (buffer-list))))
@@ -865,6 +865,56 @@
         (lispm-office-approve-all key))
       (should (string-match-p "/tmp/a" shown))
       (should-not approved))))
+
+(ert-deftest lispm-office-prompts-use-lispm-ui ()
+  "Office and inspector prompts, choosers and confirms use `lispm-ui'."
+  (lispm-office-inspect-test--with-work-office
+    (let ((prompts nil)
+          (choices nil)
+          (alerts nil))
+      (puthash "C2" (list :status 'ask :turn 7 :name "shell" :input '(:command "ls")) pending)
+      (let ((lispm-ui-form-prompt-function
+             (lambda (prompt &rest opts)
+               (push (list prompt opts) prompts)
+               (if (string-match-p "count" prompt) "6" "check in")))
+            (lispm-ui-choose-function
+             (lambda (entries &rest _)
+               (push entries choices)
+               (list (caar entries))))
+            (lispm-ui-alert-function
+             (lambda (_icon msg buttons _detail)
+               (push (list msg (mapcar #'car buttons)) alerts)
+               'agree)))
+        (with-current-buffer (lispm-office-inspect key 'work owner)
+          (lispm-office-inspect-compose))
+        (lispm-office-deny key "C1")
+        (should (equal (car (lispm-office-inspect--choose-permission
+                             (lispm-office-inspect--target key 'approve) nil))
+                       "C1"))
+        (lispm-office-approve-all key)
+        (lispm-office-abort key)
+        (with-temp-buffer
+          (setq lispm-office--records (list (list :key key))
+                lispm-office--selected key
+                lispm-office--plan '(:rooms ((:id "r1" :label "Room 1"))))
+          (cl-letf (((symbol-function 'lispm-office-send) (lambda (k text) (push (list k text) sent)))
+                    ((symbol-function 'lispm-office-fit) #'ignore))
+            (lispm-office-message)
+            (lispm-office-choose-room)
+            (should (equal lispm-office--room "r1"))))
+        (save-window-excursion
+          (let ((current-prefix-arg '(4)))
+            (cl-letf (((symbol-function 'lispm-office-demo-records) #'ignore)
+                      ((symbol-function 'lispm-office--ingest) #'ignore)
+                      ((symbol-function 'lispm-office--focus-selection) #'ignore)
+                      ((symbol-function 'lispm-office-mode) #'ignore)
+                      ((symbol-function 'lispm-office--observe) #'ignore))
+              (call-interactively #'lispm-office-demo))
+            (when (get-buffer "*LispM Office Preview*")
+              (kill-buffer "*LispM Office Preview*")))))
+      (should (= (length prompts) 4))
+      (should (= (length choices) 2))
+      (should (= (length alerts) 2)))))
 
 (ert-deftest lispm-office-inspect-close-does-not-close-another-owner ()
   (let* ((owner-a (generate-new-buffer " *Owner A*"))
